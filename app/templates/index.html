@@ -45,8 +45,17 @@
     <button id="addBorder">+ Border</button>
     <button id="addDate">+ Date</button>
     <button id="addIconBtn">+ Icon</button>
+    <button id="addFontBtn">+ Font</button>
   </div>
-  <div id="iconPicker" style="display:none; margin-bottom:12px; padding:8px; border:1px solid #ddd; border-radius:4px;"></div>
+  <div id="iconPicker" style="display:none; margin-bottom:12px; padding:8px; border:1px solid #ddd; border-radius:4px;">
+    <div id="iconStarter"></div>
+    <input type="text" id="iconSearch" placeholder="Search more icons (Material Symbols)..." style="width:100%; margin-top:8px; box-sizing:border-box;">
+    <div id="iconResults" style="margin-top:6px;"></div>
+  </div>
+  <div id="fontPicker" style="display:none; margin-bottom:12px; padding:8px; border:1px solid #ddd; border-radius:4px;">
+    <input type="text" id="fontSearch" placeholder="Search Google Fonts..." style="width:100%; box-sizing:border-box;">
+    <div id="fontResults" style="margin-top:6px; font-size:0.85rem;"></div>
+  </div>
 
   <div class="layout">
     <div id="stage-wrap"><div id="stage-container"></div></div>
@@ -182,7 +191,7 @@ function editText(node) {
     left: (rect.left + node.x() * scale) + 'px',
     width: Math.max(120, node.width() * scale) + 'px',
     fontSize: (node.fontSize() * scale) + 'px',
-    fontFamily: 'DejaVu Sans',
+    fontFamily: node.fontFamily(),
     fontWeight: node.fontStyle().includes('bold') ? 'bold' : 'normal',
     fontStyle: node.fontStyle().includes('italic') ? 'italic' : 'normal',
     border: '1px solid #888', padding: '0', margin: '0', background: 'white', outline: 'none', resize: 'none',
@@ -308,7 +317,9 @@ function updateDateField(node) {
   recalcStageSize();
 }
 
-// ---------- icon elements (curated starter set — a growable library comes later) ----------
+// ---------- icon elements ----------
+// A small curated starter set (fast, guaranteed to look good), plus a live
+// search against Google's Material Symbols library for anything else.
 
 const STARTER_ICONS = ['★', '✓', '✗', '⚠', '❄', '☀', '☂', '✉'];
 
@@ -324,6 +335,104 @@ function insertIcon(glyph) {
   registerElement(node, 'text');
   document.getElementById('iconPicker').style.display = 'none';
 }
+
+function insertIconImage(svgUrl) {
+  const img = new Image();
+  img.onload = () => {
+    const size = 80;
+    const node = new Konva.Image({
+      x: MARGIN_LEFT, y: MARGIN_TOP,
+      image: img,
+      width: size, height: size,
+    });
+    registerElement(node, 'image');
+    document.getElementById('iconPicker').style.display = 'none';
+  };
+  img.src = svgUrl;
+}
+
+let iconSearchTimer = null;
+document.getElementById('iconSearch').addEventListener('input', (e) => {
+  clearTimeout(iconSearchTimer);
+  const q = e.target.value.trim();
+  const results = document.getElementById('iconResults');
+  if (q.length < 2) { results.innerHTML = ''; return; }
+  iconSearchTimer = setTimeout(async () => {
+    const res = await fetch('/api/icons/search?q=' + encodeURIComponent(q));
+    const names = await res.json();
+    results.innerHTML = names.map(n => `<button type="button" data-name="${n}" title="${n}"><img src="/api/icons/${n}.svg" width="28" height="28"></button>`).join('');
+    [...results.children].forEach(btn => btn.onclick = () => insertIconImage(`/api/icons/${btn.dataset.name}.svg`));
+  }, 350);
+});
+
+// ---------- font library ----------
+// DejaVu Sans (the four weights already on the Pi) plus any Google Fonts
+// installed so far. Installing downloads the files once and self-hosts them
+// — after that it works the same as DejaVu Sans, no live network dependency.
+
+let installedFonts = { 'DejaVu Sans': true }; // family name -> true once its FontFaces are registered
+
+function registerGoogleFontFamily(family, files) {
+  const weightStyle = {
+    normal_normal: { weight: 'normal', style: 'normal' },
+    bold_normal: { weight: 'bold', style: 'normal' },
+    normal_italic: { weight: 'normal', style: 'italic' },
+    bold_italic: { weight: 'bold', style: 'italic' },
+  };
+  const loads = Object.entries(files).map(([key, url]) => {
+    const desc = weightStyle[key];
+    return new FontFace(family, `url(${url})`, desc).load();
+  });
+  return Promise.all(loads).then((faces) => {
+    faces.forEach(f => document.fonts.add(f));
+    installedFonts[family] = true;
+    refreshFontFamilyOptions();
+  });
+}
+
+function refreshFontFamilyOptions() {
+  const sel = document.getElementById('p_fontfamily');
+  if (!sel) return;
+  const current = selected ? selected.fontFamily() : null;
+  sel.innerHTML = Object.keys(installedFonts).sort().map(f => `<option value="${f}" ${f === current ? 'selected' : ''}>${f}</option>`).join('');
+}
+
+let fontSearchTimer = null;
+document.getElementById('fontSearch').addEventListener('input', (e) => {
+  clearTimeout(fontSearchTimer);
+  const q = e.target.value.trim();
+  const results = document.getElementById('fontResults');
+  if (q.length < 2) { results.innerHTML = ''; return; }
+  fontSearchTimer = setTimeout(async () => {
+    const res = await fetch('/api/fonts/search?q=' + encodeURIComponent(q));
+    const fonts = await res.json();
+    results.innerHTML = fonts.map(f =>
+      `<div style="padding:4px 0;">${f.family} <button type="button" data-id="${f.id}" data-family="${f.family}" style="margin-left:6px;">${installedFonts[f.family] ? 'Installed' : 'Install'}</button></div>`
+    ).join('');
+    [...results.querySelectorAll('button')].forEach(btn => btn.onclick = async () => {
+      btn.disabled = true;
+      btn.textContent = 'Installing...';
+      const r = await fetch('/api/fonts/install', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: btn.dataset.id }),
+      });
+      const data = await r.json();
+      if (data.family) {
+        await registerGoogleFontFamily(data.family, data.files);
+        if (selected && selected.getAttr('elementType') === 'text') {
+          selected.fontFamily(data.family);
+          refreshFontFamilyOptions();
+          recalcStageSize();
+        }
+      }
+      btn.textContent = 'Installed';
+    });
+  }, 400);
+});
+
+document.getElementById('addFontBtn').onclick = () => {
+  document.getElementById('fontPicker').style.display = document.getElementById('fontPicker').style.display === 'none' ? 'block' : 'none';
+};
 
 // ---------- QR elements ----------
 
@@ -386,7 +495,10 @@ function renderPanel() {
   if (type === 'text') {
     const isBold = selected.fontStyle().includes('bold');
     const isItalic = selected.fontStyle().includes('italic');
+    const fontOptions = Object.keys(installedFonts).sort()
+      .map(f => `<option value="${f}" ${f === selected.fontFamily() ? 'selected' : ''}>${f}</option>`).join('');
     html += `
+      <label>Font family <select id="p_fontfamily" style="width:100%; margin-top:2px;">${fontOptions}</select></label>
       <label>Font size <input type="number" id="p_fontsize" value="${Math.round(selected.fontSize())}" min="8" max="300"></label>
       <div class="row">
         <label style="margin-top:0;"><input type="checkbox" id="p_bold" ${isBold ? 'checked' : ''}> Bold</label>
@@ -441,6 +553,10 @@ function renderPanel() {
   }
 
   if (type === 'text') {
+    document.getElementById('p_fontfamily').addEventListener('change', (e) => {
+      selected.fontFamily(e.target.value);
+      recalcStageSize();
+    });
     document.getElementById('p_fontsize').addEventListener('input', (e) => {
       selected.fontSize(parseInt(e.target.value, 10) || 50);
       recalcStageSize();
@@ -493,11 +609,12 @@ document.getElementById('imageInput').onchange = (e) => {
   e.target.value = '';
 };
 
-const iconPicker = document.getElementById('iconPicker');
-iconPicker.innerHTML = STARTER_ICONS.map(g => `<button type="button">${g}</button>`).join('');
-[...iconPicker.children].forEach((btn, i) => btn.onclick = () => insertIcon(STARTER_ICONS[i]));
+const iconStarter = document.getElementById('iconStarter');
+iconStarter.innerHTML = STARTER_ICONS.map(g => `<button type="button">${g}</button>`).join('');
+[...iconStarter.children].forEach((btn, i) => btn.onclick = () => insertIcon(STARTER_ICONS[i]));
 document.getElementById('addIconBtn').onclick = () => {
-  iconPicker.style.display = iconPicker.style.display === 'none' ? 'block' : 'none';
+  const el = document.getElementById('iconPicker');
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
 };
 
 // ---------- print ----------
@@ -528,8 +645,20 @@ const fonts = [
   new FontFace('DejaVu Sans', 'url(/static/fonts/DejaVuSans-Oblique.ttf)', { weight: 'normal', style: 'italic' }),
   new FontFace('DejaVu Sans', 'url(/static/fonts/DejaVuSans-BoldOblique.ttf)', { weight: 'bold', style: 'italic' }),
 ];
-Promise.all(fonts.map(f => f.load())).then((loaded) => {
+Promise.all(fonts.map(f => f.load())).then(async (loaded) => {
   loaded.forEach(f => document.fonts.add(f));
+
+  // Re-register any Google Fonts installed in a previous session — they're
+  // already self-hosted on disk, so this needs no network round-trip beyond
+  // fetching the small manifest.
+  try {
+    const res = await fetch('/api/fonts/installed');
+    const manifest = await res.json();
+    await Promise.all(Object.values(manifest).map(f => registerGoogleFontFamily(f.family, f.files)));
+  } catch (e) {
+    console.warn('Could not load installed font manifest', e);
+  }
+
   addText(); // seed with one text element so the label isn't blank on load
   scaleToViewport();
 });
