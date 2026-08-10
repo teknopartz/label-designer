@@ -3,167 +3,359 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Label Designer (Phase 1)</title>
+  <title>Label Designer (Phase 2)</title>
   <style>
-    @font-face {
-      font-family: 'DejaVu Sans';
-      src: url('/static/fonts/DejaVuSans.ttf') format('truetype');
-    }
-    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 32px auto; padding: 0 16px; color: #333; }
+    @font-face { font-family: 'DejaVu Sans'; src: url('/static/fonts/DejaVuSans.ttf') format('truetype'); font-weight: normal; font-style: normal; }
+    @font-face { font-family: 'DejaVu Sans'; src: url('/static/fonts/DejaVuSans-Bold.ttf') format('truetype'); font-weight: bold; font-style: normal; }
+    @font-face { font-family: 'DejaVu Sans'; src: url('/static/fonts/DejaVuSans-Oblique.ttf') format('truetype'); font-weight: normal; font-style: italic; }
+    @font-face { font-family: 'DejaVu Sans'; src: url('/static/fonts/DejaVuSans-BoldOblique.ttf') format('truetype'); font-weight: bold; font-style: italic; }
+
+    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 32px auto; padding: 0 16px; color: #333; }
     h1 { font-size: 1.1rem; color: #444; }
-    .toolbar { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
-    .toolbar label { font-size: 0.85rem; color: #555; }
-    .toolbar input[type=number] { width: 70px; }
-    #stage-wrap { border: 1px solid #ccc; background: #fafafa; padding: 12px; display: inline-block; max-width: 100%; overflow-x: auto; }
+    .layout { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; }
+    .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    .toolbar button { padding: 8px 14px; font-size: 0.9rem; cursor: pointer; }
+    #stage-wrap { border: 1px solid #ccc; background: #fafafa; padding: 12px; display: inline-block; max-width: 100%; overflow-x: auto; flex: 1 1 auto; }
     #stage-container { transform-origin: top left; }
-    button { padding: 10px 20px; font-size: 1rem; cursor: pointer; }
+    #panel { width: 220px; flex: 0 0 220px; border: 1px solid #ddd; border-radius: 4px; padding: 12px; font-size: 0.85rem; }
+    #panel h2 { font-size: 0.85rem; margin: 0 0 8px; color: #555; }
+    #panel label { display: block; margin-top: 10px; color: #555; }
+    #panel input[type=number], #panel input[type=text] { width: 100%; box-sizing: border-box; margin-top: 2px; }
+    #panel .row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+    #panel button { margin-top: 14px; width: 100%; padding: 8px; cursor: pointer; }
+    #panel .empty { color: #999; font-style: italic; }
+    .actions { margin-top: 16px; }
+    .actions button { padding: 10px 20px; font-size: 1rem; cursor: pointer; }
     #status { margin-top: 12px; font-size: 0.9rem; min-height: 1.2em; }
     .error { color: #b00; }
     .ok { color: #060; }
-    .hint { font-size: 0.8rem; color: #888; margin-top: 6px; }
+    .hint { font-size: 0.8rem; color: #888; }
   </style>
 </head>
 <body>
-  <h1>Label Designer — Phase 1 (62mm, canvas editor)</h1>
+  <h1>Label Designer — Phase 2 (62mm, multi-element)</h1>
+  <p class="hint">Click an element to select it (handles let you resize/rotate). Double-click text to edit. Drag to reposition.</p>
 
   <div class="toolbar">
-    <label>Font size <input type="number" id="fontSize" value="60" min="10" max="200"></label>
-    <span class="hint">Double-click the text to edit. Drag to reposition.</span>
+    <button id="addText">+ Text</button>
+    <button id="addImageBtn">+ Image</button>
+    <input type="file" id="imageInput" accept="image/*" style="display:none">
+    <button id="addQr">+ QR code</button>
+    <button id="addBorder">+ Border</button>
   </div>
 
-  <div id="stage-wrap">
-    <div id="stage-container"></div>
+  <div class="layout">
+    <div id="stage-wrap"><div id="stage-container"></div></div>
+    <div id="panel"><div class="empty">Nothing selected</div></div>
   </div>
 
-  <div class="toolbar" style="margin-top:16px;">
+  <div class="actions">
     <button id="printBtn">Print</button>
   </div>
   <div id="status"></div>
 
 <script src="/static/vendor/konva.min.js"></script>
+<script src="/static/vendor/qrcode.min.js"></script>
 <script>
-const LABEL_WIDTH = 696;       // px, 62mm endless roll printable width at 300 DPI
+const LABEL_WIDTH = 696;
 const MARGIN_TOP = 24, MARGIN_BOTTOM = 24, MARGIN_LEFT = 35, MARGIN_RIGHT = 35;
+const MIN_HEIGHT = 120;
 
-const stage = new Konva.Stage({
-  container: 'stage-container',
-  width: LABEL_WIDTH,
-  height: 200, // recalculated once text is laid out
-});
+const stage = new Konva.Stage({ container: 'stage-container', width: LABEL_WIDTH, height: MIN_HEIGHT });
 const layer = new Konva.Layer();
 stage.add(layer);
 
-const textNode = new Konva.Text({
-  x: MARGIN_LEFT,
-  y: MARGIN_TOP,
-  text: 'Plain Flour',
-  fontSize: 60,
-  fontFamily: 'DejaVu Sans',
-  fill: 'black',
-  draggable: true,
-});
-layer.add(textNode);
+const transformer = new Konva.Transformer({ rotateEnabled: true });
+layer.add(transformer);
 
-function fitStageToText() {
-  const height = Math.max(textNode.height() + MARGIN_TOP + MARGIN_BOTTOM, 60);
-  stage.height(height);
+let elements = [];   // all Konva nodes the user placed
+let selected = null; // currently selected node
+
+// ---------- selection ----------
+
+function select(node) {
+  selected = node;
+  transformer.nodes(node ? [node] : []);
+  layer.draw();
+  renderPanel();
+}
+
+stage.on('click tap', (e) => {
+  if (e.target === stage) { select(null); return; }
+  if (elements.includes(e.target)) select(e.target);
+});
+
+document.addEventListener('keydown', (e) => {
+  if ((e.key === 'Delete' || e.key === 'Backspace') && selected && document.activeElement.tagName !== 'TEXTAREA' && document.activeElement.tagName !== 'INPUT') {
+    deleteSelected();
+  }
+});
+
+function deleteSelected() {
+  if (!selected) return;
+  elements = elements.filter(el => el !== selected);
+  selected.destroy();
+  select(null);
+  recalcStageSize();
+}
+
+// ---------- stage sizing ----------
+
+function recalcStageSize() {
+  let maxBottom = MIN_HEIGHT - MARGIN_BOTTOM;
+  for (const el of elements) {
+    const box = el.getClientRect({ relativeTo: stage });
+    maxBottom = Math.max(maxBottom, box.y + box.height);
+  }
+  stage.height(Math.max(maxBottom + MARGIN_BOTTOM, MIN_HEIGHT));
+  scaleToViewport();
   layer.draw();
 }
 
 function scaleToViewport() {
   const wrap = document.getElementById('stage-wrap');
-  const available = wrap.clientWidth - 24; // padding
+  const available = wrap.clientWidth - 24;
   const scale = Math.min(1, available / LABEL_WIDTH);
   document.getElementById('stage-container').style.transform = `scale(${scale})`;
   wrap.style.height = (stage.height() * scale + 24) + 'px';
 }
+window.addEventListener('resize', scaleToViewport);
 
-// --- double-click to edit, via a positioned <textarea> overlay (standard Konva pattern) ---
-textNode.on('dblclick dbltap', () => {
-  textNode.hide();
+// ---------- element registration (common wiring for every element type) ----------
+
+function registerElement(node, type) {
+  node.setAttr('elementType', type);
+  node.draggable(true);
+  node.on('dragend', recalcStageSize);
+  node.on('transformend', () => {
+    if (type === 'text') {
+      // Konva scales text via scaleX/scaleY by default; bake that into fontSize
+      // instead, so text stays crisp rather than blurry/distorted.
+      const newSize = Math.max(6, Math.round(node.fontSize() * node.scaleY()));
+      node.fontSize(newSize);
+      node.scaleX(1);
+      node.scaleY(1);
+      if (selected === node) renderPanel();
+    }
+    recalcStageSize();
+  });
+  node.on('click tap', () => select(node));
+  elements.push(node);
+  layer.add(node);
+  transformer.moveToTop();
+  select(node);
+  recalcStageSize();
+}
+
+// ---------- text elements ----------
+
+function addText() {
+  const node = new Konva.Text({
+    x: MARGIN_LEFT, y: MARGIN_TOP,
+    text: 'New text',
+    fontSize: 50,
+    fontFamily: 'DejaVu Sans',
+    fontStyle: 'normal',
+    fill: 'black',
+  });
+  node.on('dblclick dbltap', () => editText(node));
+  registerElement(node, 'text');
+}
+
+function editText(node) {
+  transformer.nodes([]);
+  node.hide();
   layer.draw();
 
   const rect = stage.container().getBoundingClientRect();
-  const scale = stage.scaleX();
+  const scale = stage.scaleX() || (parseFloat(document.getElementById('stage-container').style.transform.replace(/[^0-9.]/g, '')) || 1);
   const area = document.createElement('textarea');
   document.body.appendChild(area);
-
-  area.value = textNode.text();
+  area.value = node.text();
   Object.assign(area.style, {
     position: 'fixed',
-    top: (rect.top + textNode.y() * scale) + 'px',
-    left: (rect.left + textNode.x() * scale) + 'px',
-    width: (LABEL_WIDTH - MARGIN_LEFT - MARGIN_RIGHT) + 'px',
-    fontSize: textNode.fontSize() + 'px',
+    top: (rect.top + node.y() * scale) + 'px',
+    left: (rect.left + node.x() * scale) + 'px',
+    width: Math.max(120, node.width() * scale) + 'px',
+    fontSize: (node.fontSize() * scale) + 'px',
     fontFamily: 'DejaVu Sans',
-    border: '1px solid #888',
-    padding: '0',
-    margin: '0',
-    background: 'white',
-    outline: 'none',
-    resize: 'none',
-    lineHeight: textNode.lineHeight(),
+    fontWeight: node.fontStyle().includes('bold') ? 'bold' : 'normal',
+    fontStyle: node.fontStyle().includes('italic') ? 'italic' : 'normal',
+    border: '1px solid #888', padding: '0', margin: '0', background: 'white', outline: 'none', resize: 'none',
   });
   area.focus();
 
   function finish() {
-    textNode.text(area.value);
+    node.text(area.value);
     document.body.removeChild(area);
-    textNode.show();
-    fitStageToText();
-    scaleToViewport();
-    layer.draw();
+    node.show();
+    select(node);
+    recalcStageSize();
   }
   area.addEventListener('blur', finish);
-  area.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') finish();
+  area.addEventListener('keydown', (e) => { if (e.key === 'Escape') finish(); });
+}
+
+// ---------- image elements ----------
+
+function addImageFromFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const imgObj = new Image();
+    imgObj.onload = () => {
+      const scale = Math.min(1, (LABEL_WIDTH - MARGIN_LEFT - MARGIN_RIGHT) / imgObj.width);
+      const node = new Konva.Image({
+        x: MARGIN_LEFT, y: MARGIN_TOP,
+        image: imgObj,
+        width: imgObj.width * scale,
+        height: imgObj.height * scale,
+      });
+      registerElement(node, 'image');
+    };
+    imgObj.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+// ---------- QR elements ----------
+
+function addQr() {
+  const canvas = document.createElement('canvas');
+  QRCode.toCanvas(canvas, 'https://example.com', { margin: 0, width: 160 }, () => {
+    const node = new Konva.Image({
+      x: MARGIN_LEFT, y: MARGIN_TOP,
+      image: canvas,
+      width: 160, height: 160,
+    });
+    node.setAttr('qrText', 'https://example.com');
+    registerElement(node, 'qr');
   });
-});
+}
 
-document.getElementById('fontSize').addEventListener('input', (e) => {
-  const size = parseInt(e.target.value, 10) || 60;
-  textNode.fontSize(size);
-  fitStageToText();
-  scaleToViewport();
-  layer.draw();
-});
+function updateQrContent(node, text) {
+  const canvas = document.createElement('canvas');
+  QRCode.toCanvas(canvas, text || ' ', { margin: 0, width: 160 }, () => {
+    node.image(canvas);
+    node.setAttr('qrText', text);
+    layer.draw();
+  });
+}
 
-window.addEventListener('resize', scaleToViewport);
+// ---------- border/rectangle elements ----------
 
-// Load the self-hosted webfont before the first render so metrics are correct
-// (matches the exact .ttf the printer's own raster pipeline would use).
-const font = new FontFace('DejaVu Sans', 'url(/static/fonts/DejaVuSans.ttf)');
-font.load().then((loaded) => {
-  document.fonts.add(loaded);
-  fitStageToText();
-  scaleToViewport();
-  layer.draw();
-});
+function addBorder() {
+  const node = new Konva.Rect({
+    x: MARGIN_LEFT, y: MARGIN_TOP,
+    width: 200, height: 100,
+    stroke: 'black', strokeWidth: 2, fill: null,
+  });
+  registerElement(node, 'border');
+}
+
+// ---------- property panel ----------
+
+function renderPanel() {
+  const panel = document.getElementById('panel');
+  if (!selected) { panel.innerHTML = '<div class="empty">Nothing selected</div>'; return; }
+
+  const type = selected.getAttr('elementType');
+  let html = `<h2>${type[0].toUpperCase() + type.slice(1)}</h2>`;
+
+  if (type === 'text') {
+    const isBold = selected.fontStyle().includes('bold');
+    const isItalic = selected.fontStyle().includes('italic');
+    html += `
+      <label>Font size <input type="number" id="p_fontsize" value="${Math.round(selected.fontSize())}" min="8" max="300"></label>
+      <div class="row">
+        <label style="margin-top:0;"><input type="checkbox" id="p_bold" ${isBold ? 'checked' : ''}> Bold</label>
+        <label style="margin-top:0;"><input type="checkbox" id="p_italic" ${isItalic ? 'checked' : ''}> Italic</label>
+      </div>`;
+  }
+
+  if (type === 'qr') {
+    html += `<label>Content <input type="text" id="p_qrtext" value="${(selected.getAttr('qrText') || '').replace(/"/g, '&quot;')}"></label>`;
+  }
+
+  if (type === 'border') {
+    html += `<label>Line width <input type="number" id="p_strokewidth" value="${selected.strokeWidth()}" min="1" max="20"></label>`;
+  }
+
+  html += `<button id="p_delete">Delete</button>`;
+  panel.innerHTML = html;
+
+  if (type === 'text') {
+    document.getElementById('p_fontsize').addEventListener('input', (e) => {
+      selected.fontSize(parseInt(e.target.value, 10) || 50);
+      recalcStageSize();
+    });
+    const applyStyle = () => {
+      const bold = document.getElementById('p_bold').checked;
+      const italic = document.getElementById('p_italic').checked;
+      selected.fontStyle(`${italic ? 'italic ' : ''}${bold ? 'bold' : ''}`.trim() || 'normal');
+      recalcStageSize();
+    };
+    document.getElementById('p_bold').addEventListener('change', applyStyle);
+    document.getElementById('p_italic').addEventListener('change', applyStyle);
+  }
+
+  if (type === 'qr') {
+    document.getElementById('p_qrtext').addEventListener('change', (e) => updateQrContent(selected, e.target.value));
+  }
+
+  if (type === 'border') {
+    document.getElementById('p_strokewidth').addEventListener('input', (e) => {
+      selected.strokeWidth(parseInt(e.target.value, 10) || 1);
+      layer.draw();
+    });
+  }
+
+  document.getElementById('p_delete').addEventListener('click', deleteSelected);
+}
+
+// ---------- toolbar wiring ----------
+
+document.getElementById('addText').onclick = addText;
+document.getElementById('addQr').onclick = addQr;
+document.getElementById('addBorder').onclick = addBorder;
+document.getElementById('addImageBtn').onclick = () => document.getElementById('imageInput').click();
+document.getElementById('imageInput').onchange = (e) => {
+  if (e.target.files[0]) addImageFromFile(e.target.files[0]);
+  e.target.value = '';
+};
+
+// ---------- print ----------
 
 document.getElementById('printBtn').onclick = async () => {
+  select(null); // deselect first so the Transformer's handles aren't in the exported image
   const status = document.getElementById('status');
   status.textContent = 'Printing...';
   status.className = '';
 
-  // Export at the Stage's true internal pixel size — CSS display scaling above
-  // doesn't affect this, so what gets sent is the exact 696px-wide raster.
   const dataUrl = stage.toDataURL({ mimeType: 'image/png', pixelRatio: 1 });
   const blob = await (await fetch(dataUrl)).blob();
-
   const form = new FormData();
   form.append('image', blob, 'label.png');
 
   const res = await fetch('/api/print', { method: 'POST', body: form });
   const data = await res.json();
 
-  if (data.success) {
-    status.textContent = 'Printed.';
-    status.className = 'ok';
-  } else {
-    status.textContent = data.message;
-    status.className = 'error';
-  }
+  status.textContent = data.success ? 'Printed.' : data.message;
+  status.className = data.success ? 'ok' : 'error';
 };
+
+// ---------- boot ----------
+
+const fonts = [
+  new FontFace('DejaVu Sans', 'url(/static/fonts/DejaVuSans.ttf)', { weight: 'normal', style: 'normal' }),
+  new FontFace('DejaVu Sans', 'url(/static/fonts/DejaVuSans-Bold.ttf)', { weight: 'bold', style: 'normal' }),
+  new FontFace('DejaVu Sans', 'url(/static/fonts/DejaVuSans-Oblique.ttf)', { weight: 'normal', style: 'italic' }),
+  new FontFace('DejaVu Sans', 'url(/static/fonts/DejaVuSans-BoldOblique.ttf)', { weight: 'bold', style: 'italic' }),
+];
+Promise.all(fonts.map(f => f.load())).then((loaded) => {
+  loaded.forEach(f => document.fonts.add(f));
+  addText(); // seed with one text element so the label isn't blank on load
+  scaleToViewport();
+});
 </script>
 </body>
 </html>
