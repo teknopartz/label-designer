@@ -47,6 +47,21 @@
     <button id="addIconBtn">+ Icon</button>
     <button id="addFontBtn">+ Font</button>
     <button id="templatesBtn">Templates</button>
+    <button id="batchBtn">Batch print</button>
+  </div>
+  <div id="batchPanel" style="display:none; margin-bottom:12px; padding:8px; border:1px solid #ddd; border-radius:4px;">
+    {% raw %}
+    <p class="hint">Type <code>{{field_name}}</code> into any text element (e.g. "{{item}} - {{weight}}"), then upload a CSV with matching column headers to print one label per row.</p>
+    {% endraw %}
+    <div id="batchFields" class="hint"></div>
+    <input type="file" id="batchCsvInput" accept=".csv,text/csv">
+    <div id="batchRowInfo" class="hint" style="margin-top:6px;"></div>
+    <div class="row">
+      <button type="button" id="batchPreviewBtn" style="width:auto; margin-top:0; padding:6px 14px;" disabled>Preview row 1</button>
+      <button type="button" id="batchPrintBtn" style="width:auto; margin-top:0; padding:6px 14px;" disabled>Print all rows</button>
+    </div>
+    <div id="batchPreview" style="margin-top:8px;"></div>
+    <div id="batchStatus" class="hint" style="margin-top:6px;"></div>
   </div>
   <div id="templatesPanel" style="display:none; margin-bottom:12px; padding:8px; border:1px solid #ddd; border-radius:4px;">
     <div class="row" style="margin-top:0;">
@@ -77,6 +92,8 @@
 
 <script src="/static/vendor/konva.min.js"></script>
 <script src="/static/vendor/qrcode.min.js"></script>
+<script src="/static/vendor/papaparse.min.js"></script>
+{% raw %}
 <script>
 const LABEL_WIDTH = 696;
 const MARGIN_TOP = 24, MARGIN_BOTTOM = 24, MARGIN_LEFT = 35, MARGIN_RIGHT = 35;
@@ -792,6 +809,109 @@ document.getElementById('templateSaveBtn').onclick = async () => {
   }
 };
 
+// ---------- batch / CSV printing ----------
+// Variable fields are just {{field_name}} tokens typed directly into any
+// text element's content — no new element type needed. Batch mode
+// temporarily substitutes real values into those same nodes, exports each
+// row, then restores the original {{token}} text so the canvas stays an
+// editable template afterward.
+
+let batchRows = null;
+let batchOriginalTexts = null; // Map<node, string> captured before substitution
+
+function detectFields() {
+  const names = new Set();
+  elements.filter(el => el.getAttr('elementType') === 'text').forEach(el => {
+    const matches = el.text().matchAll(/\{\{(\w+)\}\}/g);
+    for (const m of matches) names.add(m[1]);
+  });
+  return [...names].sort();
+}
+
+function substituteRow(row) {
+  batchOriginalTexts = new Map();
+  elements.filter(el => el.getAttr('elementType') === 'text').forEach(el => {
+    const original = el.text();
+    if (!/\{\{\w+\}\}/.test(original)) return;
+    batchOriginalTexts.set(el, original);
+    const replaced = original.replace(/\{\{(\w+)\}\}/g, (m, field) => (field in row) ? row[field] : m);
+    el.text(replaced);
+  });
+  recalcStageSize();
+}
+
+function restoreTemplateText() {
+  if (!batchOriginalTexts) return;
+  batchOriginalTexts.forEach((text, el) => el.text(text));
+  batchOriginalTexts = null;
+  recalcStageSize();
+}
+
+document.getElementById('batchCsvInput').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  Papa.parse(file, {
+    header: true, skipEmptyLines: true,
+    complete: (results) => {
+      batchRows = results.data;
+      const fields = detectFields();
+      const headers = results.meta.fields || [];
+      const missing = fields.filter(f => !headers.includes(f));
+      document.getElementById('batchFields').innerHTML = fields.length
+        ? `Detected fields: <strong>${fields.join(', ')}</strong>` + (missing.length ? ` — <span style="color:#b00;">missing from CSV: ${missing.join(', ')}</span>` : '')
+        : 'No {{field}} placeholders found in the current design — add some text with {{name}}-style tokens first.';
+      document.getElementById('batchRowInfo').textContent = `${batchRows.length} row(s) loaded from ${file.name}.`;
+      const ready = fields.length > 0 && missing.length === 0 && batchRows.length > 0;
+      document.getElementById('batchPreviewBtn').disabled = !ready;
+      document.getElementById('batchPrintBtn').disabled = !ready;
+    },
+  });
+});
+
+document.getElementById('batchPreviewBtn').onclick = () => {
+  select(null);
+  substituteRow(batchRows[0]);
+  const dataUrl = stage.toDataURL({ mimeType: 'image/png', pixelRatio: 1 });
+  document.getElementById('batchPreview').innerHTML = `<img src="${dataUrl}" style="max-width:100%; border:1px solid #ccc;">`;
+  restoreTemplateText();
+};
+
+document.getElementById('batchPrintBtn').onclick = async () => {
+  select(null);
+  const status = document.getElementById('batchStatus');
+  for (let i = 0; i < batchRows.length; i++) {
+    status.textContent = `Printing row ${i + 1} of ${batchRows.length}...`;
+    substituteRow(batchRows[i]);
+    const dataUrl = stage.toDataURL({ mimeType: 'image/png', pixelRatio: 1 });
+    restoreTemplateText();
+
+    const blob = await (await fetch(dataUrl)).blob();
+    const form = new FormData();
+    form.append('image', blob, 'label.png');
+    const res = await fetch('/api/print', { method: 'POST', body: form });
+    const data = await res.json();
+
+    if (!data.success) {
+      status.textContent = `Stopped at row ${i + 1} of ${batchRows.length}: ${data.message}`;
+      status.className = 'error';
+      return;
+    }
+  }
+  status.textContent = `Printed all ${batchRows.length} labels.`;
+  status.className = 'ok';
+};
+
+document.getElementById('batchBtn').onclick = () => {
+  const el = document.getElementById('batchPanel');
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+  if (el.style.display === 'block') {
+    const fields = detectFields();
+    document.getElementById('batchFields').innerHTML = fields.length
+      ? `Detected fields: <strong>${fields.join(', ')}</strong>`
+      : 'No {{field}} placeholders found in the current design yet.';
+  }
+};
+
 // ---------- print ----------
 
 document.getElementById('printBtn').onclick = async () => {
@@ -838,5 +958,6 @@ Promise.all(fonts.map(f => f.load())).then(async (loaded) => {
   scaleToViewport();
 });
 </script>
+{% endraw %}
 </body>
 </html>
