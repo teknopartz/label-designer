@@ -46,6 +46,14 @@
     <button id="addDate">+ Date</button>
     <button id="addIconBtn">+ Icon</button>
     <button id="addFontBtn">+ Font</button>
+    <button id="templatesBtn">Templates</button>
+  </div>
+  <div id="templatesPanel" style="display:none; margin-bottom:12px; padding:8px; border:1px solid #ddd; border-radius:4px;">
+    <div class="row" style="margin-top:0;">
+      <input type="text" id="templateName" placeholder="Template name (e.g. Coffee)" style="flex:1;">
+      <button type="button" id="templateSaveBtn" style="width:auto; margin-top:0; padding:6px 14px;">Save</button>
+    </div>
+    <div id="templateList" style="margin-top:10px;"></div>
   </div>
   <div id="iconPicker" style="display:none; margin-bottom:12px; padding:8px; border:1px solid #ddd; border-radius:4px;">
     <div id="iconStarter"></div>
@@ -615,6 +623,173 @@ iconStarter.innerHTML = STARTER_ICONS.map(g => `<button type="button">${g}</butt
 document.getElementById('addIconBtn').onclick = () => {
   const el = document.getElementById('iconPicker');
   el.style.display = el.style.display === 'none' ? 'block' : 'none';
+};
+
+// ---------- templates (save/load named designs) ----------
+
+function clearCanvas() {
+  select(null);
+  elements.forEach(el => el.destroy());
+  elements = [];
+  recalcStageSize();
+}
+
+function serializeElement(node) {
+  const type = node.getAttr('elementType');
+  const base = { type, x: node.x(), y: node.y(), rotation: node.rotation() };
+
+  if (type === 'text') {
+    return Object.assign(base, {
+      text: node.text(),
+      fontFamily: node.fontFamily(),
+      fontSize: node.fontSize(),
+      fontStyle: node.fontStyle(),
+      isDateField: !!node.getAttr('isDateField'),
+      dateFormat: node.getAttr('dateFormat') || null,
+    });
+  }
+  if (type === 'qr') {
+    return Object.assign(base, { width: node.width(), height: node.height(), qrText: node.getAttr('qrText') });
+  }
+  if (type === 'border') {
+    return Object.assign(base, { width: node.width(), height: node.height(), strokeWidth: node.strokeWidth() });
+  }
+  if (type === 'image') {
+    return Object.assign(base, {
+      width: node.width(), height: node.height(),
+      imageMode: node.getAttr('imageMode'), threshold: node.getAttr('threshold'),
+      originalSrc: node.getAttr('originalSrc'),
+    });
+  }
+  return base;
+}
+
+function serializeCanvas() {
+  return elements.map(serializeElement);
+}
+
+function deserializeElement(desc) {
+  if (desc.type === 'text') {
+    const node = new Konva.Text({
+      x: desc.x, y: desc.y, rotation: desc.rotation,
+      text: desc.text, fontFamily: desc.fontFamily, fontSize: desc.fontSize,
+      fontStyle: desc.fontStyle, fill: 'black',
+    });
+    node.on('dblclick dbltap', () => editText(node));
+    if (desc.isDateField) {
+      node.setAttr('isDateField', true);
+      node.setAttr('dateFormat', desc.dateFormat);
+      // Deliberately NOT restoring the saved date — a reused template should
+      // default to today, which is the whole point of a "date" field.
+      node.setAttr('dateValue', toLocalISODate(new Date()));
+      node.text(formatDate(node.getAttr('dateValue'), desc.dateFormat));
+    }
+    registerElement(node, 'text');
+    return;
+  }
+
+  if (desc.type === 'qr') {
+    const canvas = document.createElement('canvas');
+    QRCode.toCanvas(canvas, desc.qrText || ' ', { margin: 0, width: 160 }, () => {
+      const node = new Konva.Image({
+        x: desc.x, y: desc.y, rotation: desc.rotation,
+        image: canvas, width: desc.width, height: desc.height,
+      });
+      node.setAttr('qrText', desc.qrText);
+      registerElement(node, 'qr');
+    });
+    return;
+  }
+
+  if (desc.type === 'border') {
+    const node = new Konva.Rect({
+      x: desc.x, y: desc.y, rotation: desc.rotation,
+      width: desc.width, height: desc.height,
+      stroke: 'black', strokeWidth: desc.strokeWidth, fill: null,
+    });
+    registerElement(node, 'border');
+    return;
+  }
+
+  if (desc.type === 'image') {
+    const imgObj = new Image();
+    imgObj.onload = () => {
+      const node = new Konva.Image({
+        x: desc.x, y: desc.y, rotation: desc.rotation,
+        image: imgObj, width: desc.width, height: desc.height,
+      });
+      node.setAttr('originalSrc', desc.originalSrc);
+      node.setAttr('imageMode', desc.imageMode);
+      node.setAttr('threshold', desc.threshold);
+      registerElement(node, 'image');
+      if (desc.imageMode === 'bw') applyImageMode(node);
+    };
+    imgObj.src = desc.originalSrc;
+  }
+}
+
+function loadTemplateData(data) {
+  clearCanvas();
+  data.forEach(deserializeElement);
+  select(null);
+}
+
+async function refreshTemplateList() {
+  const res = await fetch('/api/templates');
+  const names = await res.json();
+  const list = document.getElementById('templateList');
+  if (names.length === 0) {
+    list.innerHTML = '<div class="hint">No saved templates yet.</div>';
+    return;
+  }
+  list.innerHTML = names.map(n => `
+    <div class="row" style="margin-top:6px;">
+      <span style="flex:1;">${n}</span>
+      <button type="button" data-action="load" data-name="${n}" style="width:auto; margin-top:0; padding:4px 10px;">Load</button>
+      <button type="button" data-action="delete" data-name="${n}" style="width:auto; margin-top:0; padding:4px 10px;">Delete</button>
+    </div>`).join('');
+  list.querySelectorAll('button').forEach(btn => {
+    btn.onclick = async () => {
+      const name = btn.dataset.name;
+      if (btn.dataset.action === 'load') {
+        const res = await fetch('/api/templates/' + encodeURIComponent(name));
+        loadTemplateData(await res.json());
+        document.getElementById('templatesPanel').style.display = 'none';
+      } else {
+        await fetch('/api/templates/' + encodeURIComponent(name), { method: 'DELETE' });
+        refreshTemplateList();
+      }
+    };
+  });
+}
+
+document.getElementById('templatesBtn').onclick = () => {
+  const el = document.getElementById('templatesPanel');
+  const showing = el.style.display === 'none';
+  el.style.display = showing ? 'block' : 'none';
+  if (showing) refreshTemplateList();
+};
+
+document.getElementById('templateSaveBtn').onclick = async () => {
+  const nameInput = document.getElementById('templateName');
+  const name = nameInput.value.trim();
+  if (!name) return;
+  select(null); // don't save mid-edit transformer state
+  const res = await fetch('/api/templates/' + encodeURIComponent(name), {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(serializeCanvas()),
+  });
+  const status = document.getElementById('status');
+  if (res.ok) {
+    nameInput.value = '';
+    refreshTemplateList();
+    status.textContent = `Saved "${name}".`;
+    status.className = 'ok';
+  } else {
+    const data = await res.json();
+    status.textContent = data.error || 'Save failed';
+    status.className = 'error';
+  }
 };
 
 // ---------- print ----------

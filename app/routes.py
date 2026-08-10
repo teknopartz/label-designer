@@ -3,6 +3,7 @@ from flask import Blueprint, current_app, render_template, request, jsonify, sen
 
 from .printer import PrinterQueue, PrinterOffline
 from . import assets
+from . import label_store
 
 bp = Blueprint('main', __name__)
 
@@ -104,3 +105,39 @@ def icon_svg(name):
     except Exception as e:
         return jsonify(error=str(e)), 404
     return send_file(path, mimetype='image/svg+xml')
+
+
+@bp.route('/api/templates')
+def templates_list():
+    return jsonify(label_store.list_templates())
+
+
+@bp.route('/api/templates/<name>', methods=['GET'])
+def templates_get(name):
+    try:
+        return jsonify(label_store.load_template(name))
+    except FileNotFoundError:
+        return jsonify(error='not found'), 404
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+
+
+@bp.route('/api/templates/<name>', methods=['PUT'])
+def templates_save(name):
+    data = request.get_json(silent=True)
+    if data is None:
+        return jsonify(error='missing JSON body'), 400
+    try:
+        label_store.save_template(name, data)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    return jsonify(success=True)
+
+
+@bp.route('/api/templates/<name>', methods=['DELETE'])
+def templates_delete(name):
+    try:
+        label_store.delete_template(name)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    return jsonify(success=True)
