@@ -1,0 +1,3 @@
+Flask
+brother_ql-inventree
+Pillow==10.*
