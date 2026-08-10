@@ -2,59 +2,160 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Label Designer (Phase 0)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Label Designer (Phase 1)</title>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 40px auto; padding: 0 16px; }
+    @font-face {
+      font-family: 'DejaVu Sans';
+      src: url('/static/fonts/DejaVuSans.ttf') format('truetype');
+    }
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 32px auto; padding: 0 16px; color: #333; }
     h1 { font-size: 1.1rem; color: #444; }
-    textarea { width: 100%; height: 100px; font-size: 1rem; box-sizing: border-box; }
-    label { display: block; margin-top: 12px; font-size: 0.9rem; color: #555; }
-    input[type=number] { width: 80px; }
-    button { margin-top: 16px; padding: 10px 20px; font-size: 1rem; cursor: pointer; }
-    #preview { margin-top: 20px; border: 1px solid #ccc; padding: 8px; background: #fafafa; }
-    #preview img { max-width: 100%; }
-    #status { margin-top: 12px; font-size: 0.9rem; }
+    .toolbar { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+    .toolbar label { font-size: 0.85rem; color: #555; }
+    .toolbar input[type=number] { width: 70px; }
+    #stage-wrap { border: 1px solid #ccc; background: #fafafa; padding: 12px; display: inline-block; max-width: 100%; overflow-x: auto; }
+    #stage-container { transform-origin: top left; }
+    button { padding: 10px 20px; font-size: 1rem; cursor: pointer; }
+    #status { margin-top: 12px; font-size: 0.9rem; min-height: 1.2em; }
     .error { color: #b00; }
     .ok { color: #060; }
+    .hint { font-size: 0.8rem; color: #888; margin-top: 6px; }
   </style>
 </head>
 <body>
-  <h1>Label Designer — Phase 0 skeleton (62mm)</h1>
-  <textarea id="text" placeholder="Label text&#10;(one font for now — rich editor lands in Phase 2)"></textarea>
-  <label>Font size <input type="number" id="font_size" value="60" min="10" max="200"></label>
-  <button id="previewBtn">Preview</button>
-  <button id="printBtn">Print</button>
-  <div id="status"></div>
-  <div id="preview"></div>
+  <h1>Label Designer — Phase 1 (62mm, canvas editor)</h1>
 
+  <div class="toolbar">
+    <label>Font size <input type="number" id="fontSize" value="60" min="10" max="200"></label>
+    <span class="hint">Double-click the text to edit. Drag to reposition.</span>
+  </div>
+
+  <div id="stage-wrap">
+    <div id="stage-container"></div>
+  </div>
+
+  <div class="toolbar" style="margin-top:16px;">
+    <button id="printBtn">Print</button>
+  </div>
+  <div id="status"></div>
+
+<script src="/static/vendor/konva.min.js"></script>
 <script>
-async function request(path) {
-  const body = new URLSearchParams({
-    text: document.getElementById('text').value,
-    font_size: document.getElementById('font_size').value,
-  });
-  const res = await fetch(path, { method: 'POST', body });
-  return { res, data: await res.json() };
+const LABEL_WIDTH = 696;       // px, 62mm endless roll printable width at 300 DPI
+const MARGIN_TOP = 24, MARGIN_BOTTOM = 24, MARGIN_LEFT = 35, MARGIN_RIGHT = 35;
+
+const stage = new Konva.Stage({
+  container: 'stage-container',
+  width: LABEL_WIDTH,
+  height: 200, // recalculated once text is laid out
+});
+const layer = new Konva.Layer();
+stage.add(layer);
+
+const textNode = new Konva.Text({
+  x: MARGIN_LEFT,
+  y: MARGIN_TOP,
+  text: 'Plain Flour',
+  fontSize: 60,
+  fontFamily: 'DejaVu Sans',
+  fill: 'black',
+  draggable: true,
+});
+layer.add(textNode);
+
+function fitStageToText() {
+  const height = Math.max(textNode.height() + MARGIN_TOP + MARGIN_BOTTOM, 60);
+  stage.height(height);
+  layer.draw();
 }
 
-document.getElementById('previewBtn').onclick = async () => {
-  const status = document.getElementById('status');
-  status.textContent = 'Rendering preview...';
-  status.className = '';
-  const { res, data } = await request('/api/preview');
-  if (data.success) {
-    document.getElementById('preview').innerHTML = `<img src="${data.image}">`;
-    status.textContent = '';
-  } else {
-    status.textContent = data.message;
-    status.className = 'error';
+function scaleToViewport() {
+  const wrap = document.getElementById('stage-wrap');
+  const available = wrap.clientWidth - 24; // padding
+  const scale = Math.min(1, available / LABEL_WIDTH);
+  document.getElementById('stage-container').style.transform = `scale(${scale})`;
+  wrap.style.height = (stage.height() * scale + 24) + 'px';
+}
+
+// --- double-click to edit, via a positioned <textarea> overlay (standard Konva pattern) ---
+textNode.on('dblclick dbltap', () => {
+  textNode.hide();
+  layer.draw();
+
+  const rect = stage.container().getBoundingClientRect();
+  const scale = stage.scaleX();
+  const area = document.createElement('textarea');
+  document.body.appendChild(area);
+
+  area.value = textNode.text();
+  Object.assign(area.style, {
+    position: 'fixed',
+    top: (rect.top + textNode.y() * scale) + 'px',
+    left: (rect.left + textNode.x() * scale) + 'px',
+    width: (LABEL_WIDTH - MARGIN_LEFT - MARGIN_RIGHT) + 'px',
+    fontSize: textNode.fontSize() + 'px',
+    fontFamily: 'DejaVu Sans',
+    border: '1px solid #888',
+    padding: '0',
+    margin: '0',
+    background: 'white',
+    outline: 'none',
+    resize: 'none',
+    lineHeight: textNode.lineHeight(),
+  });
+  area.focus();
+
+  function finish() {
+    textNode.text(area.value);
+    document.body.removeChild(area);
+    textNode.show();
+    fitStageToText();
+    scaleToViewport();
+    layer.draw();
   }
-};
+  area.addEventListener('blur', finish);
+  area.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') finish();
+  });
+});
+
+document.getElementById('fontSize').addEventListener('input', (e) => {
+  const size = parseInt(e.target.value, 10) || 60;
+  textNode.fontSize(size);
+  fitStageToText();
+  scaleToViewport();
+  layer.draw();
+});
+
+window.addEventListener('resize', scaleToViewport);
+
+// Load the self-hosted webfont before the first render so metrics are correct
+// (matches the exact .ttf the printer's own raster pipeline would use).
+const font = new FontFace('DejaVu Sans', 'url(/static/fonts/DejaVuSans.ttf)');
+font.load().then((loaded) => {
+  document.fonts.add(loaded);
+  fitStageToText();
+  scaleToViewport();
+  layer.draw();
+});
 
 document.getElementById('printBtn').onclick = async () => {
   const status = document.getElementById('status');
   status.textContent = 'Printing...';
   status.className = '';
-  const { res, data } = await request('/api/print');
+
+  // Export at the Stage's true internal pixel size — CSS display scaling above
+  // doesn't affect this, so what gets sent is the exact 696px-wide raster.
+  const dataUrl = stage.toDataURL({ mimeType: 'image/png', pixelRatio: 1 });
+  const blob = await (await fetch(dataUrl)).blob();
+
+  const form = new FormData();
+  form.append('image', blob, 'label.png');
+
+  const res = await fetch('/api/print', { method: 'POST', body: form });
+  const data = await res.json();
+
   if (data.success) {
     status.textContent = 'Printed.';
     status.className = 'ok';

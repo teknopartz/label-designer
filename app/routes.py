@@ -1,9 +1,6 @@
-import io
-import base64
-
+from PIL import Image
 from flask import Blueprint, current_app, render_template, request, jsonify
 
-from .label import render_text_label
 from .printer import PrinterQueue, PrinterOffline
 
 bp = Blueprint('main', __name__)
@@ -14,18 +11,24 @@ def index():
     return render_template('index.html')
 
 
+def _load_uploaded_image():
+    file = request.files.get('image')
+    if file is None:
+        return None, ("No image received", 400)
+    try:
+        img = Image.open(file.stream)
+        img.load()
+    except Exception:
+        return None, ("Uploaded file isn't a valid image", 400)
+    return img, None
+
+
 @bp.route('/api/print', methods=['POST'])
 def print_label():
-    text = (request.form.get('text') or '').strip()
-    if not text:
-        return jsonify(success=False, message="Nothing to print — enter some text first."), 400
-
-    try:
-        font_size = int(request.form.get('font_size', 60))
-    except ValueError:
-        font_size = 60
-
-    img = render_text_label(text, font_size=font_size)
+    img, error = _load_uploaded_image()
+    if error:
+        message, status = error
+        return jsonify(success=False, message=message), status
 
     printer = PrinterQueue(
         model=current_app.config['PRINTER_MODEL'],
@@ -50,21 +53,3 @@ def print_label():
         return jsonify(success=False, message=str(e)), 500
 
     return jsonify(success=True)
-
-
-@bp.route('/api/preview', methods=['POST'])
-def preview_label():
-    text = (request.form.get('text') or '').strip()
-    if not text:
-        return jsonify(success=False, message="Nothing to preview"), 400
-
-    try:
-        font_size = int(request.form.get('font_size', 60))
-    except ValueError:
-        font_size = 60
-
-    img = render_text_label(text, font_size=font_size)
-    buf = io.BytesIO()
-    img.save(buf, format='PNG')
-    b64 = base64.b64encode(buf.getvalue()).decode('ascii')
-    return jsonify(success=True, image=f"data:image/png;base64,{b64}")
