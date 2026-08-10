@@ -30,6 +30,7 @@
     .error { color: #b00; }
     .ok { color: #060; }
     .hint { font-size: 0.8rem; color: #888; }
+    #iconPicker button { font-size: 1.6rem; padding: 6px 10px; margin: 2px; cursor: pointer; font-family: 'DejaVu Sans', sans-serif; }
   </style>
 </head>
 <body>
@@ -42,7 +43,10 @@
     <input type="file" id="imageInput" accept="image/*" style="display:none">
     <button id="addQr">+ QR code</button>
     <button id="addBorder">+ Border</button>
+    <button id="addDate">+ Date</button>
+    <button id="addIconBtn">+ Icon</button>
   </div>
+  <div id="iconPicker" style="display:none; margin-bottom:12px; padding:8px; border:1px solid #ddd; border-radius:4px;"></div>
 
   <div class="layout">
     <div id="stage-wrap"><div id="stage-container"></div></div>
@@ -210,11 +214,105 @@ function addImageFromFile(file) {
         width: imgObj.width * scale,
         height: imgObj.height * scale,
       });
+      // Keep the pristine original around so mode/threshold changes always
+      // re-derive from source pixels rather than compounding on each other.
+      node.setAttr('originalSrc', reader.result);
+      node.setAttr('imageMode', 'grayscale');
+      node.setAttr('threshold', 128);
       registerElement(node, 'image');
     };
     imgObj.src = reader.result;
   };
   reader.readAsDataURL(file);
+}
+
+function applyImageMode(node) {
+  const mode = node.getAttr('imageMode') || 'grayscale';
+  const threshold = node.getAttr('threshold') || 128;
+  const src = new Image();
+  src.onload = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = src.width;
+    canvas.height = src.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(src, 0, 0);
+
+    if (mode === 'bw') {
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const d = imgData.data;
+      for (let i = 0; i < d.length; i += 4) {
+        // Standard luminance-weighted grayscale, then a hard threshold —
+        // this is what will actually print (no further dithering needed
+        // on an already-binary image), so this preview is accurate.
+        const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+        const v = lum >= threshold ? 255 : 0;
+        d[i] = d[i + 1] = d[i + 2] = v;
+      }
+      ctx.putImageData(imgData, 0, 0);
+    }
+    // 'grayscale' mode: pass the original through unmodified — brother_ql
+    // dithers this at print time, same as the current default behaviour.
+
+    node.image(canvas);
+    layer.draw();
+  };
+  src.src = node.getAttr('originalSrc');
+}
+
+// ---------- date elements ----------
+
+const DATE_FORMATS = {
+  'dmy_slash': (d) => d.toLocaleDateString('en-GB'),                                    // 10/08/2026
+  'dmy_short': (d) => d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }), // 10 Aug 2026
+  'mdy_long':  (d) => d.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }), // Aug 10, 2026
+  'iso':       (d) => d.toISOString().slice(0, 10),                                     // 2026-08-10
+};
+const DATE_FORMAT_LABELS = {
+  dmy_slash: 'DD/MM/YYYY', dmy_short: 'DD Mon YYYY', mdy_long: 'Mon DD, YYYY', iso: 'YYYY-MM-DD',
+};
+
+function formatDate(dateStr, formatKey) {
+  const d = new Date(dateStr + 'T00:00:00');
+  return (DATE_FORMATS[formatKey] || DATE_FORMATS.dmy_slash)(d);
+}
+
+function addDateField() {
+  const today = new Date().toISOString().slice(0, 10);
+  const node = new Konva.Text({
+    x: MARGIN_LEFT, y: MARGIN_TOP,
+    text: formatDate(today, 'dmy_slash'),
+    fontSize: 50,
+    fontFamily: 'DejaVu Sans',
+    fontStyle: 'normal',
+    fill: 'black',
+  });
+  node.on('dblclick dbltap', () => editText(node)); // still plain-text editable if wanted
+  node.setAttr('isDateField', true);
+  node.setAttr('dateValue', today);
+  node.setAttr('dateFormat', 'dmy_slash');
+  registerElement(node, 'text');
+}
+
+function updateDateField(node) {
+  node.text(formatDate(node.getAttr('dateValue'), node.getAttr('dateFormat')));
+  recalcStageSize();
+}
+
+// ---------- icon elements (curated starter set — a growable library comes later) ----------
+
+const STARTER_ICONS = ['★', '✓', '✗', '⚠', '❄', '☀', '☂', '✉'];
+
+function insertIcon(glyph) {
+  const node = new Konva.Text({
+    x: MARGIN_LEFT, y: MARGIN_TOP,
+    text: glyph,
+    fontSize: 80,
+    fontFamily: 'DejaVu Sans',
+    fontStyle: 'normal',
+    fill: 'black',
+  });
+  registerElement(node, 'text');
+  document.getElementById('iconPicker').style.display = 'none';
 }
 
 // ---------- QR elements ----------
@@ -259,7 +357,21 @@ function renderPanel() {
   if (!selected) { panel.innerHTML = '<div class="empty">Nothing selected</div>'; return; }
 
   const type = selected.getAttr('elementType');
-  let html = `<h2>${type[0].toUpperCase() + type.slice(1)}</h2>`;
+  const isDateField = type === 'text' && selected.getAttr('isDateField');
+  let html = `<h2>${isDateField ? 'Date' : type[0].toUpperCase() + type.slice(1)}</h2>`;
+
+  if (isDateField) {
+    const fmtOptions = Object.keys(DATE_FORMAT_LABELS)
+      .map(k => `<option value="${k}" ${selected.getAttr('dateFormat') === k ? 'selected' : ''}>${DATE_FORMAT_LABELS[k]}</option>`)
+      .join('');
+    html += `
+      <label>Date <input type="date" id="p_datevalue" value="${selected.getAttr('dateValue')}"></label>
+      <div class="row">
+        <button id="p_dateminus" type="button" style="margin-top:0; width:auto; padding:4px 10px;">−1 day</button>
+        <button id="p_dateplus" type="button" style="margin-top:0; width:auto; padding:4px 10px;">+1 day</button>
+      </div>
+      <label>Format <select id="p_dateformat" style="width:100%; margin-top:2px;">${fmtOptions}</select></label>`;
+  }
 
   if (type === 'text') {
     const isBold = selected.fontStyle().includes('bold');
@@ -280,8 +392,43 @@ function renderPanel() {
     html += `<label>Line width <input type="number" id="p_strokewidth" value="${selected.strokeWidth()}" min="1" max="20"></label>`;
   }
 
+  if (type === 'image') {
+    const mode = selected.getAttr('imageMode') || 'grayscale';
+    html += `
+      <label>Mode
+        <select id="p_imgmode" style="width:100%; margin-top:2px;">
+          <option value="grayscale" ${mode === 'grayscale' ? 'selected' : ''}>Grayscale (dithered)</option>
+          <option value="bw" ${mode === 'bw' ? 'selected' : ''}>Black &amp; White (threshold)</option>
+        </select>
+      </label>
+      <label id="p_threshold_label" style="display:${mode === 'bw' ? 'block' : 'none'};">
+        Threshold <input type="range" id="p_threshold" min="0" max="255" value="${selected.getAttr('threshold') || 128}">
+      </label>`;
+  }
+
   html += `<button id="p_delete">Delete</button>`;
   panel.innerHTML = html;
+
+  if (isDateField) {
+    document.getElementById('p_datevalue').addEventListener('change', (e) => {
+      selected.setAttr('dateValue', e.target.value);
+      updateDateField(selected);
+    });
+    document.getElementById('p_dateformat').addEventListener('change', (e) => {
+      selected.setAttr('dateFormat', e.target.value);
+      updateDateField(selected);
+    });
+    const shiftDate = (days) => {
+      const d = new Date(selected.getAttr('dateValue') + 'T00:00:00');
+      d.setDate(d.getDate() + days);
+      const iso = d.toISOString().slice(0, 10);
+      selected.setAttr('dateValue', iso);
+      document.getElementById('p_datevalue').value = iso;
+      updateDateField(selected);
+    };
+    document.getElementById('p_dateminus').addEventListener('click', () => shiftDate(-1));
+    document.getElementById('p_dateplus').addEventListener('click', () => shiftDate(1));
+  }
 
   if (type === 'text') {
     document.getElementById('p_fontsize').addEventListener('input', (e) => {
@@ -309,6 +456,18 @@ function renderPanel() {
     });
   }
 
+  if (type === 'image') {
+    document.getElementById('p_imgmode').addEventListener('change', (e) => {
+      selected.setAttr('imageMode', e.target.value);
+      document.getElementById('p_threshold_label').style.display = e.target.value === 'bw' ? 'block' : 'none';
+      applyImageMode(selected);
+    });
+    document.getElementById('p_threshold').addEventListener('input', (e) => {
+      selected.setAttr('threshold', parseInt(e.target.value, 10));
+      applyImageMode(selected);
+    });
+  }
+
   document.getElementById('p_delete').addEventListener('click', deleteSelected);
 }
 
@@ -317,10 +476,18 @@ function renderPanel() {
 document.getElementById('addText').onclick = addText;
 document.getElementById('addQr').onclick = addQr;
 document.getElementById('addBorder').onclick = addBorder;
+document.getElementById('addDate').onclick = addDateField;
 document.getElementById('addImageBtn').onclick = () => document.getElementById('imageInput').click();
 document.getElementById('imageInput').onchange = (e) => {
   if (e.target.files[0]) addImageFromFile(e.target.files[0]);
   e.target.value = '';
+};
+
+const iconPicker = document.getElementById('iconPicker');
+iconPicker.innerHTML = STARTER_ICONS.map(g => `<button type="button">${g}</button>`).join('');
+[...iconPicker.children].forEach((btn, i) => btn.onclick = () => insertIcon(STARTER_ICONS[i]));
+document.getElementById('addIconBtn').onclick = () => {
+  iconPicker.style.display = iconPicker.style.display === 'none' ? 'block' : 'none';
 };
 
 // ---------- print ----------
