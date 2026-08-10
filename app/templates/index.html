@@ -276,8 +276,18 @@ function formatDate(dateStr, formatKey) {
   return (DATE_FORMATS[formatKey] || DATE_FORMATS.dmy_slash)(d);
 }
 
+function toLocalISODate(d) {
+  // Deliberately NOT toISOString() — that formats in UTC, which silently
+  // shifts the calendar date by a day for anyone east of UTC (e.g. AWST,
+  // UTC+8) once local midnight crosses back over the UTC date boundary.
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 function addDateField() {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = toLocalISODate(new Date());
   const node = new Konva.Text({
     x: MARGIN_LEFT, y: MARGIN_TOP,
     text: formatDate(today, 'dmy_slash'),
@@ -421,7 +431,7 @@ function renderPanel() {
     const shiftDate = (days) => {
       const d = new Date(selected.getAttr('dateValue') + 'T00:00:00');
       d.setDate(d.getDate() + days);
-      const iso = d.toISOString().slice(0, 10);
+      const iso = toLocalISODate(d);
       selected.setAttr('dateValue', iso);
       document.getElementById('p_datevalue').value = iso;
       updateDateField(selected);
