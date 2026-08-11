@@ -57,6 +57,14 @@
     .error { color: #b00; }
     .ok { color: #060; }
     .hint { font-size: 0.8rem; color: #888; }
+
+    /* Shared style for the Font/Icon/Templates toolbar dropdowns, so they
+       look and behave consistently instead of each being a slightly
+       different one-off box. */
+    .dropdown-panel { margin-bottom: 12px; padding: 14px; border: 1px solid #ccc; border-radius: 6px; background: #fafcff; box-shadow: 0 2px 8px rgba(0,0,0,0.07); }
+    .dropdown-panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .dropdown-panel-header h3 { margin: 0; font-size: 1rem; color: #444; }
+    .dropdown-close { width: auto; margin-top: 0; padding: 4px 12px; font-size: 1rem; line-height: 1.2; cursor: pointer; background: #eee; border: 1px solid #ccc; border-radius: 4px; }
     #iconPicker button { font-size: 1.6rem; padding: 6px 10px; margin: 2px; cursor: pointer; font-family: 'DejaVu Sans', sans-serif; }
     .font-spinner {
       display: inline-block; width: 12px; height: 12px; margin-right: 6px;
@@ -81,35 +89,23 @@
     <button id="addIconBtn">⭐ Icon</button>
     <button id="addFontBtn">🔤 Font</button>
     <button id="templatesBtn">📁 Templates</button>
-    <button id="batchBtn">🖨️ Batch print</button>
   </div>
-  <div id="batchPanel" style="display:none; margin-bottom:12px; padding:8px; border:1px solid #ddd; border-radius:4px;">
-    {% raw %}
-    <p class="hint">Type <code>{{field_name}}</code> into any text element (e.g. "{{item}} - {{weight}}"), then upload a CSV with matching column headers to print one label per row.</p>
-    {% endraw %}
-    <div id="batchFields" class="hint"></div>
-    <input type="file" id="batchCsvInput" accept=".csv,text/csv">
-    <div id="batchRowInfo" class="hint" style="margin-top:6px;"></div>
-    <div class="row">
-      <button type="button" id="batchPreviewBtn" style="width:auto; margin-top:0; padding:6px 14px;" disabled>Preview row 1</button>
-      <button type="button" id="batchPrintBtn" style="width:auto; margin-top:0; padding:6px 14px;" disabled>Print all rows</button>
-    </div>
-    <div id="batchPreview" style="margin-top:8px;"></div>
-    <div id="batchStatus" class="hint" style="margin-top:6px;"></div>
-  </div>
-  <div id="templatesPanel" style="display:none; margin-bottom:12px; padding:8px; border:1px solid #ddd; border-radius:4px;">
+  <div id="templatesPanel" class="dropdown-panel" style="display:none;">
+    <div class="dropdown-panel-header"><h3>Templates</h3><button type="button" class="dropdown-close" data-target="templatesPanel">✕</button></div>
     <div class="row" style="margin-top:0;">
       <input type="text" id="templateName" placeholder="Template name (e.g. Coffee)" style="flex:1;">
       <button type="button" id="templateSaveBtn" style="width:auto; margin-top:0; padding:6px 14px;">Save</button>
     </div>
     <div id="templateList" style="margin-top:10px;"></div>
   </div>
-  <div id="iconPicker" style="display:none; margin-bottom:12px; padding:8px; border:1px solid #ddd; border-radius:4px;">
+  <div id="iconPicker" class="dropdown-panel" style="display:none;">
+    <div class="dropdown-panel-header"><h3>Icons</h3><button type="button" class="dropdown-close" data-target="iconPicker">✕</button></div>
     <div id="iconStarter"></div>
     <input type="text" id="iconSearch" placeholder="Search more icons (Material Symbols)..." style="width:100%; margin-top:8px; box-sizing:border-box;">
     <div id="iconResults" style="margin-top:6px;"></div>
   </div>
-  <div id="fontPicker" style="display:none; margin-bottom:12px; padding:8px; border:1px solid #ddd; border-radius:4px;">
+  <div id="fontPicker" class="dropdown-panel" style="display:none;">
+    <div class="dropdown-panel-header"><h3>Fonts</h3><button type="button" class="dropdown-close" data-target="fontPicker">✕</button></div>
     <input type="text" id="fontSearch" placeholder="Search Google Fonts..." style="width:100%; box-sizing:border-box;">
     <div id="fontResults" style="margin-top:6px; font-size:0.85rem;"></div>
   </div>
@@ -126,7 +122,6 @@
 
 <script src="/static/vendor/konva.min.js"></script>
 <script src="/static/vendor/qrcode.min.js"></script>
-<script src="/static/vendor/papaparse.min.js"></script>
 {% raw %}
 <script>
 const LABEL_WIDTH = 696;
@@ -139,6 +134,34 @@ stage.add(layer);
 
 const transformer = new Konva.Transformer({ rotateEnabled: true });
 layer.add(transformer);
+
+// Resize-snapping: boundBoxFunc receives the box the Transformer is about
+// to apply and can hand back a corrected one — the standard Konva mechanism
+// for this, rather than fighting the Transformer's own internal scale math.
+// Skipped while rotated to keep the edge math simple (rotation makes "left
+// edge" ambiguous in stage coordinates).
+transformer.boundBoxFunc((oldBox, newBox) => {
+  const node = transformer.nodes()[0];
+  guideLayer.destroyChildren();
+  if (!node || newBox.rotation !== 0) { guideLayer.batchDraw(); return newBox; }
+
+  const stops = getGuideStops(node);
+  const left = newBox.x, right = newBox.x + newBox.width;
+  const top = newBox.y, bottom = newBox.y + newBox.height;
+
+  for (const s of stops.vertical) {
+    if (Math.abs(left - s) < SNAP_THRESHOLD) { newBox.width += newBox.x - s; newBox.x = s; drawGuide('V', s); break; }
+    if (Math.abs(right - s) < SNAP_THRESHOLD) { newBox.width = s - newBox.x; drawGuide('V', s); break; }
+  }
+  for (const s of stops.horizontal) {
+    if (Math.abs(top - s) < SNAP_THRESHOLD) { newBox.height += newBox.y - s; newBox.y = s; drawGuide('H', s); break; }
+    if (Math.abs(bottom - s) < SNAP_THRESHOLD) { newBox.height = s - newBox.y; drawGuide('H', s); break; }
+  }
+  guideLayer.batchDraw();
+
+  if (newBox.width < 5 || newBox.height < 5) return oldBox;
+  return newBox;
+});
 
 // Separate, non-interactive layer for the temporary snap-guide lines drawn
 // while dragging. Cleared before every export just in case — a stray guide
@@ -287,8 +310,14 @@ function registerElement(node, type) {
     // node's real properties instead, every time, for every element type.
     const sx = node.scaleX(), sy = node.scaleY();
     if (type === 'text') {
+      // Vertical resize (top/bottom handles, or a corner) changes font size.
+      // Horizontal resize (left/right-middle handles) changes the box width
+      // independently, so the box can be wider than its text — the text
+      // stays centered within it (align:'center'), it doesn't get stretched.
       const newSize = Math.max(6, Math.round(node.fontSize() * sy));
+      const newWidth = Math.max(newSize * 0.6, node.width() * sx);
       node.fontSize(newSize);
+      node.width(newWidth);
       node.scaleX(1);
       node.scaleY(1);
       if (selected === node) renderPanel();
@@ -303,6 +332,7 @@ function registerElement(node, type) {
       node.scaleX(1);
       node.scaleY(1);
     }
+    clearGuides();
     recalcStageSize();
   });
   node.on('click tap', () => select(node));
@@ -315,6 +345,17 @@ function registerElement(node, type) {
 
 // ---------- text elements ----------
 
+// Text elements get an explicit, independently-resizable box width (not
+// Konva's default auto-width-to-content) so the box can be wider than its
+// text, with the text centered inside — like a real text box, not a label
+// that hugs its own content. Called once right after creation: at that
+// point Konva has already auto-measured a natural width, which we then pin
+// as an explicit value going forward (resize changes it from here on, text
+// content changes no longer do).
+function pinTextWidth(node) {
+  node.width(node.width());
+}
+
 function addText() {
   const node = new Konva.Text({
     x: MARGIN_LEFT, y: MARGIN_TOP,
@@ -323,7 +364,9 @@ function addText() {
     fontFamily: 'DejaVu Sans',
     fontStyle: 'normal',
     fill: 'black',
+    align: 'center',
   });
+  pinTextWidth(node);
   node.on('dblclick dbltap', () => editText(node));
   registerElement(node, 'text');
 }
@@ -457,7 +500,9 @@ function addDateField() {
     fontFamily: 'DejaVu Sans',
     fontStyle: 'normal',
     fill: 'black',
+    align: 'center',
   });
+  pinTextWidth(node);
   node.on('dblclick dbltap', () => editText(node)); // still plain-text editable if wanted
   node.setAttr('isDateField', true);
   node.setAttr('dateValue', today);
@@ -484,9 +529,12 @@ function insertIcon(glyph) {
     fontFamily: 'DejaVu Sans',
     fontStyle: 'normal',
     fill: 'black',
+    align: 'center',
   });
+  pinTextWidth(node);
   registerElement(node, 'text');
-  document.getElementById('iconPicker').style.display = 'none';
+  // Deliberately NOT closing the picker — inserting several icons in a row
+  // shouldn't mean reopening it each time. Closed via its own ✕ button.
 }
 
 function insertIconImage(svgUrl) {
@@ -499,7 +547,7 @@ function insertIconImage(svgUrl) {
       width: size, height: size,
     });
     registerElement(node, 'image');
-    document.getElementById('iconPicker').style.display = 'none';
+    // Left open, same reasoning as insertIcon() — closed via its own ✕.
   };
   img.src = svgUrl;
 }
@@ -612,9 +660,31 @@ document.getElementById('fontSearch').addEventListener('input', (e) => {
   }, 400);
 });
 
-document.getElementById('addFontBtn').onclick = () => {
-  document.getElementById('fontPicker').style.display = document.getElementById('fontPicker').style.display === 'none' ? 'block' : 'none';
-};
+// The three toolbar dropdowns (Font/Icon/Templates) share consistent
+// styling and behavior: opening one closes any other that's open, and each
+// has its own ✕ to dismiss explicitly rather than auto-closing on its own
+// (the icon picker in particular needs to stay open across multiple inserts).
+const DROPDOWN_PANEL_IDS = ['fontPicker', 'iconPicker', 'templatesPanel'];
+
+function closeAllDropdowns() {
+  DROPDOWN_PANEL_IDS.forEach(id => { document.getElementById(id).style.display = 'none'; });
+}
+
+function toggleDropdown(id, onOpen) {
+  const el = document.getElementById(id);
+  const opening = el.style.display === 'none';
+  closeAllDropdowns();
+  if (opening) {
+    el.style.display = 'block';
+    if (onOpen) onOpen();
+  }
+}
+
+document.querySelectorAll('.dropdown-close').forEach(btn => {
+  btn.addEventListener('click', () => { document.getElementById(btn.dataset.target).style.display = 'none'; });
+});
+
+document.getElementById('addFontBtn').onclick = () => toggleDropdown('fontPicker');
 
 // ---------- QR elements ----------
 
@@ -642,6 +712,34 @@ function updateQrContent(node, text) {
 
 // ---------- border/rectangle and line elements ----------
 
+const BORDER_STYLES = [
+  { value: 'solid', label: 'Solid' },
+  { value: 'dashed', label: 'Dashed' },
+  { value: 'dotted', label: 'Dotted' },
+  { value: 'rounded', label: 'Rounded corners' },
+];
+
+function applyBorderStyle(node, style) {
+  node.setAttr('borderStyle', style);
+  node.cornerRadius(0);
+  node.lineCap('butt');
+  switch (style) {
+    case 'dashed':
+      node.dash([node.strokeWidth() * 5, node.strokeWidth() * 3]);
+      break;
+    case 'dotted':
+      node.dash([0.5, node.strokeWidth() * 2.5]);
+      node.lineCap('round');
+      break;
+    case 'rounded':
+      node.dash([]);
+      node.cornerRadius(14);
+      break;
+    default:
+      node.dash([]);
+  }
+}
+
 function addBorder() {
   // Defaults to framing the whole label as it currently stands, rather than
   // a small arbitrary box — resize/reposition afterward as needed.
@@ -651,6 +749,7 @@ function addBorder() {
     height: Math.max(40, stage.height() - MARGIN_TOP - MARGIN_BOTTOM),
     stroke: 'black', strokeWidth: 2, fill: null,
   });
+  applyBorderStyle(node, 'solid');
   registerElement(node, 'border');
 }
 
@@ -660,6 +759,7 @@ function addLine() {
     points: [0, 0, Math.max(40, LABEL_WIDTH - MARGIN_LEFT - MARGIN_RIGHT), 0],
     stroke: 'black', strokeWidth: 2, hitStrokeWidth: 24,
   });
+  applyBorderStyle(node, 'solid');
   registerElement(node, 'line');
 }
 
@@ -738,7 +838,14 @@ function renderPanel() {
 
   if (type === 'border' || type === 'line') {
     const width = selected.strokeWidth();
-    html += `<div class="field grow"><label>Line width — <span id="p_strokewidth_val">${width}</span>px</label><input type="range" id="p_strokewidth" value="${width}" min="1" max="20"></div>`;
+    const currentStyle = selected.getAttr('borderStyle') || 'solid';
+    const styleChoices = type === 'border' ? BORDER_STYLES : BORDER_STYLES.filter(s => s.value !== 'rounded');
+    const styleOptions = styleChoices.map(s => `<option value="${s.value}" ${s.value === currentStyle ? 'selected' : ''}>${s.label}</option>`).join('');
+    html += `
+      <div class="fields-row">
+        <div class="field grow"><label>Line width — <span id="p_strokewidth_val">${width}</span>px</label><input type="range" id="p_strokewidth" value="${width}" min="1" max="20"></div>
+        <div class="field grow"><label>Style</label><select id="p_borderstyle">${styleOptions}</select></div>
+      </div>`;
   }
 
   if (type === 'image') {
@@ -827,6 +934,11 @@ function renderPanel() {
       const width = parseInt(e.target.value, 10) || 1;
       selected.strokeWidth(width);
       document.getElementById('p_strokewidth_val').textContent = width;
+      applyBorderStyle(selected, selected.getAttr('borderStyle') || 'solid'); // keep dash/dot spacing proportional to the new width
+      layer.draw();
+    });
+    document.getElementById('p_borderstyle').addEventListener('change', (e) => {
+      applyBorderStyle(selected, e.target.value);
       layer.draw();
     });
   }
@@ -862,10 +974,7 @@ document.getElementById('imageInput').onchange = (e) => {
 const iconStarter = document.getElementById('iconStarter');
 iconStarter.innerHTML = STARTER_ICONS.map(g => `<button type="button">${g}</button>`).join('');
 [...iconStarter.children].forEach((btn, i) => btn.onclick = () => insertIcon(STARTER_ICONS[i]));
-document.getElementById('addIconBtn').onclick = () => {
-  const el = document.getElementById('iconPicker');
-  el.style.display = el.style.display === 'none' ? 'block' : 'none';
-};
+document.getElementById('addIconBtn').onclick = () => toggleDropdown('iconPicker');
 
 // ---------- templates (save/load named designs) ----------
 
@@ -883,6 +992,7 @@ function serializeElement(node) {
   if (type === 'text') {
     return Object.assign(base, {
       text: node.text(),
+      width: node.width(),
       fontFamily: node.fontFamily(),
       fontSize: node.fontSize(),
       fontStyle: node.fontStyle(),
@@ -894,10 +1004,10 @@ function serializeElement(node) {
     return Object.assign(base, { width: node.width(), height: node.height(), qrText: node.getAttr('qrText') });
   }
   if (type === 'border') {
-    return Object.assign(base, { width: node.width(), height: node.height(), strokeWidth: node.strokeWidth() });
+    return Object.assign(base, { width: node.width(), height: node.height(), strokeWidth: node.strokeWidth(), borderStyle: node.getAttr('borderStyle') });
   }
   if (type === 'line') {
-    return Object.assign(base, { points: node.points(), strokeWidth: node.strokeWidth() });
+    return Object.assign(base, { points: node.points(), strokeWidth: node.strokeWidth(), borderStyle: node.getAttr('borderStyle') });
   }
   if (type === 'image') {
     return Object.assign(base, {
@@ -918,8 +1028,11 @@ function deserializeElement(desc) {
     const node = new Konva.Text({
       x: desc.x, y: desc.y, rotation: desc.rotation,
       text: desc.text, fontFamily: desc.fontFamily, fontSize: desc.fontSize,
-      fontStyle: desc.fontStyle, fill: 'black',
+      fontStyle: desc.fontStyle, fill: 'black', align: 'center',
     });
+    // desc.width is undefined for templates saved before this was tracked —
+    // fall back to auto-measuring, same as a freshly-created text element.
+    node.width(desc.width || node.width());
     node.on('dblclick dbltap', () => editText(node));
     if (desc.isDateField) {
       node.setAttr('isDateField', true);
@@ -952,6 +1065,7 @@ function deserializeElement(desc) {
       width: desc.width, height: desc.height,
       stroke: 'black', strokeWidth: desc.strokeWidth, fill: null,
     });
+    applyBorderStyle(node, desc.borderStyle || 'solid');
     registerElement(node, 'border');
     return;
   }
@@ -961,6 +1075,7 @@ function deserializeElement(desc) {
       x: desc.x, y: desc.y, rotation: desc.rotation,
       points: desc.points, stroke: 'black', strokeWidth: desc.strokeWidth, hitStrokeWidth: 24,
     });
+    applyBorderStyle(node, desc.borderStyle || 'solid');
     registerElement(node, 'line');
     return;
   }
@@ -1017,12 +1132,7 @@ async function refreshTemplateList() {
   });
 }
 
-document.getElementById('templatesBtn').onclick = () => {
-  const el = document.getElementById('templatesPanel');
-  const showing = el.style.display === 'none';
-  el.style.display = showing ? 'block' : 'none';
-  if (showing) refreshTemplateList();
-};
+document.getElementById('templatesBtn').onclick = () => toggleDropdown('templatesPanel', refreshTemplateList);
 
 document.getElementById('templateSaveBtn').onclick = async () => {
   const nameInput = document.getElementById('templateName');
@@ -1043,111 +1153,6 @@ document.getElementById('templateSaveBtn').onclick = async () => {
     const data = await res.json();
     status.textContent = data.error || 'Save failed';
     status.className = 'error';
-  }
-};
-
-// ---------- batch / CSV printing ----------
-// Variable fields are just {{field_name}} tokens typed directly into any
-// text element's content — no new element type needed. Batch mode
-// temporarily substitutes real values into those same nodes, exports each
-// row, then restores the original {{token}} text so the canvas stays an
-// editable template afterward.
-
-let batchRows = null;
-let batchOriginalTexts = null; // Map<node, string> captured before substitution
-
-function detectFields() {
-  const names = new Set();
-  elements.filter(el => el.getAttr('elementType') === 'text').forEach(el => {
-    const matches = el.text().matchAll(/\{\{(\w+)\}\}/g);
-    for (const m of matches) names.add(m[1]);
-  });
-  return [...names].sort();
-}
-
-function substituteRow(row) {
-  batchOriginalTexts = new Map();
-  elements.filter(el => el.getAttr('elementType') === 'text').forEach(el => {
-    const original = el.text();
-    if (!/\{\{\w+\}\}/.test(original)) return;
-    batchOriginalTexts.set(el, original);
-    const replaced = original.replace(/\{\{(\w+)\}\}/g, (m, field) => (field in row) ? row[field] : m);
-    el.text(replaced);
-  });
-  recalcStageSize();
-}
-
-function restoreTemplateText() {
-  if (!batchOriginalTexts) return;
-  batchOriginalTexts.forEach((text, el) => el.text(text));
-  batchOriginalTexts = null;
-  recalcStageSize();
-}
-
-document.getElementById('batchCsvInput').addEventListener('change', (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  Papa.parse(file, {
-    header: true, skipEmptyLines: true,
-    complete: (results) => {
-      batchRows = results.data;
-      const fields = detectFields();
-      const headers = results.meta.fields || [];
-      const missing = fields.filter(f => !headers.includes(f));
-      document.getElementById('batchFields').innerHTML = fields.length
-        ? `Detected fields: <strong>${fields.join(', ')}</strong>` + (missing.length ? ` — <span style="color:#b00;">missing from CSV: ${missing.join(', ')}</span>` : '')
-        : 'No {{field}} placeholders found in the current design — add some text with {{name}}-style tokens first.';
-      document.getElementById('batchRowInfo').textContent = `${batchRows.length} row(s) loaded from ${file.name}.`;
-      const ready = fields.length > 0 && missing.length === 0 && batchRows.length > 0;
-      document.getElementById('batchPreviewBtn').disabled = !ready;
-      document.getElementById('batchPrintBtn').disabled = !ready;
-    },
-  });
-});
-
-document.getElementById('batchPreviewBtn').onclick = () => {
-  select(null);
-  clearGuides();
-  substituteRow(batchRows[0]);
-  const dataUrl = stage.toDataURL({ mimeType: 'image/png', pixelRatio: 1 });
-  document.getElementById('batchPreview').innerHTML = `<img src="${dataUrl}" style="max-width:100%; border:1px solid #ccc;">`;
-  restoreTemplateText();
-};
-
-document.getElementById('batchPrintBtn').onclick = async () => {
-  select(null);
-  clearGuides();
-  const status = document.getElementById('batchStatus');
-  for (let i = 0; i < batchRows.length; i++) {
-    status.textContent = `Printing row ${i + 1} of ${batchRows.length}...`;
-    substituteRow(batchRows[i]);
-    const dataUrl = stage.toDataURL({ mimeType: 'image/png', pixelRatio: 1 });
-    restoreTemplateText();
-
-    const blob = await (await fetch(dataUrl)).blob();
-    const form = new FormData();
-    form.append('image', blob, 'label.png');
-    const res = await fetch('/api/print', { method: 'POST', body: form });
-    const data = await res.json();
-
-    if (!data.success) {
-      status.textContent = `Stopped at row ${i + 1} of ${batchRows.length}: ${data.message}`;
-      status.className = 'error';
-      return;
-    }
-  }
-  status.textContent = `Printed all ${batchRows.length} labels.`;
-  status.className = 'ok';
-};
-
-document.getElementById('batchBtn').onclick = () => {
-  const el = document.getElementById('batchPanel');
-  el.style.display = el.style.display === 'none' ? 'block' : 'none';
-  if (el.style.display === 'block') {
-    const fields = detectFields();
-    document.getElementById('batchFields').innerHTML = fields.length
-      ? `Detected fields: <strong>${fields.join(', ')}</strong>`
-      : 'No {{field}} placeholders found in the current design yet.';
   }
 };
 
