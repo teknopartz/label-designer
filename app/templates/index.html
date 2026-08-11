@@ -212,7 +212,7 @@ window.addEventListener('resize', scaleToViewport);
 
 // ---------- snap / alignment guides ----------
 
-const SNAP_THRESHOLD = 6; // px, in stage coordinates
+const SNAP_THRESHOLD = 14; // px, in stage coordinates — generous enough to actually notice/trust on touch
 
 function getGuideStops(skipNode) {
   // Snap to the printable margins, not the raw stage edges — content that
@@ -238,7 +238,7 @@ function getNodeEdges(node, box) {
 
 function drawGuide(orientation, pos) {
   const points = orientation === 'V' ? [pos, -6000, pos, 6000] : [-6000, pos, 6000, pos];
-  guideLayer.add(new Konva.Line({ points, stroke: '#0af', strokeWidth: 1, dash: [4, 4] }));
+  guideLayer.add(new Konva.Line({ points, stroke: '#ff3b8d', strokeWidth: 2.5, dash: [8, 5] }));
 }
 
 function snapOnDragMove(node) {
