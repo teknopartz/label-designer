@@ -10,20 +10,47 @@
     @font-face { font-family: 'DejaVu Sans'; src: url('/static/fonts/DejaVuSans-Oblique.ttf') format('truetype'); font-weight: normal; font-style: italic; }
     @font-face { font-family: 'DejaVu Sans'; src: url('/static/fonts/DejaVuSans-BoldOblique.ttf') format('truetype'); font-weight: bold; font-style: italic; }
 
-    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 32px auto; padding: 0 16px; color: #333; }
+    body { font-family: system-ui, sans-serif; max-width: 1100px; margin: 32px auto; padding: 0 16px; color: #333; }
     h1 { font-size: 1.1rem; color: #444; }
-    .layout { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; }
+    .layout { display: flex; flex-direction: column; gap: 16px; }
     .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-    .toolbar button { padding: 8px 14px; font-size: 0.9rem; cursor: pointer; }
-    #stage-wrap { border: 1px solid #ccc; background: #fafafa; padding: 12px; display: inline-block; max-width: 100%; overflow-x: auto; flex: 1 1 auto; }
+    .toolbar button { padding: 10px 16px; font-size: 0.95rem; cursor: pointer; }
+    /* Sized to hug its actual content (the canvas) — must NOT flex-grow past
+       that, or the background visually extends past the true label edge
+       while dragged elements still clip exactly at the real boundary. */
+    #stage-wrap { border: 1px solid #ccc; background: #fafafa; padding: 12px; display: inline-block; max-width: 100%; overflow-x: auto; flex: 0 0 auto; }
     #stage-container { transform-origin: top left; }
-    #panel { width: 220px; flex: 0 0 220px; border: 1px solid #ddd; border-radius: 4px; padding: 12px; font-size: 0.85rem; }
-    #panel h2 { font-size: 0.85rem; margin: 0 0 8px; color: #555; }
-    #panel label { display: block; margin-top: 10px; color: #555; }
-    #panel input[type=number], #panel input[type=text] { width: 100%; box-sizing: border-box; margin-top: 2px; }
-    #panel .row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
-    #panel button { margin-top: 14px; width: 100%; padding: 8px; cursor: pointer; }
+
+    /* Property panel: full-width, controls arranged in a row and wrapping,
+       sized for touch rather than a narrow desktop sidebar. */
+    #panel { width: 100%; box-sizing: border-box; border: 1px solid #ddd; border-radius: 4px; padding: 16px; font-size: 0.95rem; transition: opacity 0.15s; }
+    #panel.disabled { opacity: 0.45; pointer-events: none; }
+    #panel h2 { font-size: 0.95rem; margin: 0 0 12px; color: #555; }
+    #panel .field { display: flex; flex-direction: column; gap: 4px; }
+    #panel .field label { font-size: 0.8rem; color: #666; }
+    #panel .fields-row { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-end; }
+    #panel .field.grow { flex: 1 1 260px; min-width: 220px; }
+    #panel input[type=number], #panel input[type=text] { box-sizing: border-box; padding: 8px; font-size: 1rem; }
+    #panel input[type=range] { width: 100%; height: 32px; }
+    #panel .checks { display: flex; gap: 16px; align-items: center; }
+    #panel .checks label { display: flex; align-items: center; gap: 6px; font-size: 0.9rem; color: #333; }
+    #panel .checks input { width: 20px; height: 20px; }
+    #panel .row { display: flex; gap: 8px; align-items: center; }
+    #panel button { padding: 10px 16px; cursor: pointer; font-size: 0.95rem; }
+    #panel .actions-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
     #panel .empty { color: #999; font-style: italic; }
+
+    /* Custom font-family picker — native <select> can't reliably render each
+       option in its own font (especially on Android), so this is a styled
+       dropdown built from scratch. */
+    .font-dropdown { position: relative; }
+    .font-dropdown-btn { width: 100%; box-sizing: border-box; text-align: left; padding: 10px; font-size: 1rem; background: white; border: 1px solid #bbb; border-radius: 4px; cursor: pointer; }
+    .font-dropdown-list { position: absolute; z-index: 20; top: 100%; left: 0; right: 0; max-height: 260px; overflow-y: auto; background: white; border: 1px solid #bbb; border-radius: 4px; box-shadow: 0 4px 10px rgba(0,0,0,0.15); display: none; }
+    .font-dropdown-list.open { display: block; }
+    .font-dropdown-item { padding: 12px; font-size: 1.15rem; cursor: pointer; border-bottom: 1px solid #eee; }
+    .font-dropdown-item:hover, .font-dropdown-item:focus { background: #f0f6ff; }
+    .font-dropdown-item.selected { background: #e6f0ff; }
+
     .actions { margin-top: 16px; }
     .actions button { padding: 10px 20px; font-size: 1rem; cursor: pointer; }
     #status { margin-top: 12px; font-size: 0.9rem; min-height: 1.2em; }
@@ -49,6 +76,7 @@
     <input type="file" id="imageInput" accept="image/*" style="display:none">
     <button id="addQr">+ QR code</button>
     <button id="addBorder">+ Border</button>
+    <button id="addLine">+ Line</button>
     <button id="addDate">+ Date</button>
     <button id="addIconBtn">+ Icon</button>
     <button id="addFontBtn">+ Font</button>
@@ -88,7 +116,7 @@
 
   <div class="layout">
     <div id="stage-wrap"><div id="stage-container"></div></div>
-    <div id="panel"><div class="empty">Nothing selected</div></div>
+    <div id="panel" class="disabled"><div class="empty">Nothing selected</div></div>
   </div>
 
   <div class="actions">
@@ -127,7 +155,16 @@ function select(node) {
   selected = node;
   transformer.nodes(node ? [node] : []);
   layer.draw();
-  renderPanel();
+  const panel = document.getElementById('panel');
+  if (node) {
+    panel.classList.remove('disabled');
+    renderPanel();
+  } else {
+    // Leave whatever was last shown in place, just dimmed — switching to a
+    // blank "Nothing selected" panel and back is jarring while dragging
+    // elements near each other, since selection blips through null.
+    panel.classList.add('disabled');
+  }
 }
 
 stage.on('click tap', (e) => {
@@ -241,14 +278,27 @@ function registerElement(node, type) {
   node.on('dragmove', () => snapOnDragMove(node));
   node.on('dragend', () => { clearGuides(); recalcStageSize(); });
   node.on('transformend', () => {
+    // Konva's Transformer resizes via scaleX/scaleY by default. Left as-is,
+    // that stretches stroke width (borders/lines look thicker on one side
+    // than the other) and blurs raster content. Bake the scale into the
+    // node's real properties instead, every time, for every element type.
+    const sx = node.scaleX(), sy = node.scaleY();
     if (type === 'text') {
-      // Konva scales text via scaleX/scaleY by default; bake that into fontSize
-      // instead, so text stays crisp rather than blurry/distorted.
-      const newSize = Math.max(6, Math.round(node.fontSize() * node.scaleY()));
+      const newSize = Math.max(6, Math.round(node.fontSize() * sy));
       node.fontSize(newSize);
       node.scaleX(1);
       node.scaleY(1);
       if (selected === node) renderPanel();
+    } else if (type === 'line') {
+      const pts = node.points();
+      node.points(pts.map((v, i) => (i % 2 === 0 ? v * sx : v * sy)));
+      node.scaleX(1);
+      node.scaleY(1);
+    } else {
+      node.width(Math.max(4, node.width() * sx));
+      node.height(Math.max(4, node.height() * sy));
+      node.scaleX(1);
+      node.scaleY(1);
     }
     recalcStageSize();
   });
@@ -486,15 +536,8 @@ function registerGoogleFontFamily(family, files) {
   return Promise.all(loads).then((faces) => {
     faces.forEach(f => document.fonts.add(f));
     installedFonts[family] = true;
-    refreshFontFamilyOptions();
+    if (selected && selected.getAttr('elementType') === 'text') renderPanel();
   });
-}
-
-function refreshFontFamilyOptions() {
-  const sel = document.getElementById('p_fontfamily');
-  if (!sel) return;
-  const current = selected ? selected.fontFamily() : null;
-  sel.innerHTML = Object.keys(installedFonts).sort().map(f => `<option value="${f}" ${f === current ? 'selected' : ''}>${f}</option>`).join('');
 }
 
 // Live preview of search results, loaded straight from Google's CDN — not
@@ -557,7 +600,7 @@ document.getElementById('fontSearch').addEventListener('input', (e) => {
         await registerGoogleFontFamily(data.family, data.files);
         if (selected && selected.getAttr('elementType') === 'text') {
           selected.fontFamily(data.family);
-          refreshFontFamilyOptions();
+          renderPanel();
           recalcStageSize();
         }
       }
@@ -594,18 +637,56 @@ function updateQrContent(node, text) {
   });
 }
 
-// ---------- border/rectangle elements ----------
+// ---------- border/rectangle and line elements ----------
 
 function addBorder() {
+  // Defaults to framing the whole label as it currently stands, rather than
+  // a small arbitrary box — resize/reposition afterward as needed.
   const node = new Konva.Rect({
     x: MARGIN_LEFT, y: MARGIN_TOP,
-    width: 200, height: 100,
+    width: Math.max(40, LABEL_WIDTH - MARGIN_LEFT - MARGIN_RIGHT),
+    height: Math.max(40, stage.height() - MARGIN_TOP - MARGIN_BOTTOM),
     stroke: 'black', strokeWidth: 2, fill: null,
   });
   registerElement(node, 'border');
 }
 
+function addLine() {
+  const node = new Konva.Line({
+    x: MARGIN_LEFT, y: MARGIN_TOP + 30,
+    points: [0, 0, Math.max(40, LABEL_WIDTH - MARGIN_LEFT - MARGIN_RIGHT), 0],
+    stroke: 'black', strokeWidth: 2, hitStrokeWidth: 24,
+  });
+  registerElement(node, 'line');
+}
+
 // ---------- property panel ----------
+
+function fontDropdownHtml(currentFamily) {
+  const families = Object.keys(installedFonts).sort();
+  const items = families.map(f => `<div class="font-dropdown-item${f === currentFamily ? ' selected' : ''}" data-family="${f}" style="font-family:'${f}';" tabindex="0">${f}</div>`).join('');
+  return `
+    <div class="font-dropdown" id="p_fontfamily_wrap">
+      <button type="button" class="font-dropdown-btn" id="p_fontfamily_btn" style="font-family:'${currentFamily}';">${currentFamily}</button>
+      <div class="font-dropdown-list" id="p_fontfamily_list">${items}</div>
+    </div>`;
+}
+
+function wireFontDropdown(onSelect) {
+  const btn = document.getElementById('p_fontfamily_btn');
+  const list = document.getElementById('p_fontfamily_list');
+  btn.addEventListener('click', (e) => { e.stopPropagation(); list.classList.toggle('open'); });
+  list.querySelectorAll('.font-dropdown-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const family = item.dataset.family;
+      btn.textContent = family;
+      btn.style.fontFamily = `'${family}'`;
+      list.classList.remove('open');
+      onSelect(family);
+    });
+  });
+  document.addEventListener('click', () => list.classList.remove('open'), { once: true });
+}
 
 function renderPanel() {
   const panel = document.getElementById('panel');
@@ -620,59 +701,71 @@ function renderPanel() {
       .map(k => `<option value="${k}" ${selected.getAttr('dateFormat') === k ? 'selected' : ''}>${DATE_FORMAT_LABELS[k]}</option>`)
       .join('');
     html += `
-      <label>Date <input type="date" id="p_datevalue" value="${selected.getAttr('dateValue')}"></label>
-      <div class="row">
-        <button id="p_dateminus" type="button" style="margin-top:0; width:auto; padding:4px 10px;">−1 day</button>
-        <button id="p_dateplus" type="button" style="margin-top:0; width:auto; padding:4px 10px;">+1 day</button>
-      </div>
-      <label>Format <select id="p_dateformat" style="width:100%; margin-top:2px;">${fmtOptions}</select></label>`;
+      <div class="fields-row">
+        <div class="field"><label>Date</label><input type="date" id="p_datevalue" value="${selected.getAttr('dateValue')}"></div>
+        <div class="row">
+          <button id="p_dateminus" type="button">−1 day</button>
+          <button id="p_dateplus" type="button">+1 day</button>
+        </div>
+        <div class="field"><label>Format</label><select id="p_dateformat">${fmtOptions}</select></div>
+      </div>`;
   }
 
   if (type === 'text') {
     const isBold = selected.fontStyle().includes('bold');
     const isItalic = selected.fontStyle().includes('italic');
-    const fontOptions = Object.keys(installedFonts).sort()
-      .map(f => `<option value="${f}" ${f === selected.fontFamily() ? 'selected' : ''}>${f}</option>`).join('');
+    const size = Math.round(selected.fontSize());
     html += `
-      <label>Font family <select id="p_fontfamily" style="width:100%; margin-top:2px;">${fontOptions}</select></label>
-      <label>Font size <input type="number" id="p_fontsize" value="${Math.round(selected.fontSize())}" min="8" max="300"></label>
-      <div class="row">
-        <label style="margin-top:0;"><input type="checkbox" id="p_bold" ${isBold ? 'checked' : ''}> Bold</label>
-        <label style="margin-top:0;"><input type="checkbox" id="p_italic" ${isItalic ? 'checked' : ''}> Italic</label>
+      <div class="fields-row">
+        <div class="field grow"><label>Font family</label>${fontDropdownHtml(selected.fontFamily())}</div>
+        <div class="field grow">
+          <label>Font size — <span id="p_fontsize_val">${size}</span>px</label>
+          <input type="range" id="p_fontsize" value="${size}" min="10" max="300">
+        </div>
+        <div class="checks">
+          <label><input type="checkbox" id="p_bold" ${isBold ? 'checked' : ''}> Bold</label>
+          <label><input type="checkbox" id="p_italic" ${isItalic ? 'checked' : ''}> Italic</label>
+        </div>
       </div>`;
   }
 
   if (type === 'qr') {
-    html += `<label>Content <input type="text" id="p_qrtext" value="${(selected.getAttr('qrText') || '').replace(/"/g, '&quot;')}"></label>`;
+    html += `<div class="field grow"><label>Content</label><input type="text" id="p_qrtext" value="${(selected.getAttr('qrText') || '').replace(/"/g, '&quot;')}"></div>`;
   }
 
-  if (type === 'border') {
-    html += `<label>Line width <input type="number" id="p_strokewidth" value="${selected.strokeWidth()}" min="1" max="20"></label>`;
+  if (type === 'border' || type === 'line') {
+    const width = selected.strokeWidth();
+    html += `<div class="field grow"><label>Line width — <span id="p_strokewidth_val">${width}</span>px</label><input type="range" id="p_strokewidth" value="${width}" min="1" max="20"></div>`;
   }
 
   if (type === 'image') {
     const mode = selected.getAttr('imageMode') || 'grayscale';
     html += `
-      <label>Mode
-        <select id="p_imgmode" style="width:100%; margin-top:2px;">
-          <option value="grayscale" ${mode === 'grayscale' ? 'selected' : ''}>Grayscale (dithered)</option>
-          <option value="bw" ${mode === 'bw' ? 'selected' : ''}>Black &amp; White (threshold)</option>
-        </select>
-      </label>
-      <label id="p_threshold_label" style="display:${mode === 'bw' ? 'block' : 'none'};">
-        Threshold <input type="range" id="p_threshold" min="0" max="255" value="${selected.getAttr('threshold') || 128}">
-      </label>`;
+      <div class="fields-row">
+        <div class="field grow">
+          <label>Mode</label>
+          <select id="p_imgmode">
+            <option value="grayscale" ${mode === 'grayscale' ? 'selected' : ''}>Grayscale (dithered)</option>
+            <option value="bw" ${mode === 'bw' ? 'selected' : ''}>Black &amp; White (threshold)</option>
+          </select>
+        </div>
+        <div class="field grow" id="p_threshold_label" style="display:${mode === 'bw' ? 'flex' : 'none'};">
+          <label>Threshold</label>
+          <input type="range" id="p_threshold" min="0" max="255" value="${selected.getAttr('threshold') || 128}">
+        </div>
+      </div>`;
   }
 
   html += `
-    <label>Layer order</label>
-    <div class="row" style="margin-top:2px;">
-      <button type="button" id="p_toFront" title="Bring to front" style="width:auto; margin-top:0; padding:4px 8px;">⤒</button>
-      <button type="button" id="p_forward" title="Bring forward" style="width:auto; margin-top:0; padding:4px 8px;">▲</button>
-      <button type="button" id="p_backward" title="Send backward" style="width:auto; margin-top:0; padding:4px 8px;">▼</button>
-      <button type="button" id="p_toBack" title="Send to back" style="width:auto; margin-top:0; padding:4px 8px;">⤓</button>
-    </div>
-    <button id="p_delete">Delete</button>`;
+    <div class="actions-row">
+      <div class="row">
+        <button type="button" id="p_toFront" title="Bring to front">⤒</button>
+        <button type="button" id="p_forward" title="Bring forward">▲</button>
+        <button type="button" id="p_backward" title="Send backward">▼</button>
+        <button type="button" id="p_toBack" title="Send to back">⤓</button>
+      </div>
+      <button id="p_delete">Delete</button>
+    </div>`;
   panel.innerHTML = html;
 
   document.getElementById('p_toFront').addEventListener('click', () => { selected.moveToTop(); transformer.moveToTop(); layer.draw(); });
@@ -702,12 +795,14 @@ function renderPanel() {
   }
 
   if (type === 'text') {
-    document.getElementById('p_fontfamily').addEventListener('change', (e) => {
-      selected.fontFamily(e.target.value);
+    wireFontDropdown((family) => {
+      selected.fontFamily(family);
       recalcStageSize();
     });
     document.getElementById('p_fontsize').addEventListener('input', (e) => {
-      selected.fontSize(parseInt(e.target.value, 10) || 50);
+      const size = parseInt(e.target.value, 10) || 50;
+      selected.fontSize(size);
+      document.getElementById('p_fontsize_val').textContent = size;
       recalcStageSize();
     });
     const applyStyle = () => {
@@ -724,9 +819,11 @@ function renderPanel() {
     document.getElementById('p_qrtext').addEventListener('change', (e) => updateQrContent(selected, e.target.value));
   }
 
-  if (type === 'border') {
+  if (type === 'border' || type === 'line') {
     document.getElementById('p_strokewidth').addEventListener('input', (e) => {
-      selected.strokeWidth(parseInt(e.target.value, 10) || 1);
+      const width = parseInt(e.target.value, 10) || 1;
+      selected.strokeWidth(width);
+      document.getElementById('p_strokewidth_val').textContent = width;
       layer.draw();
     });
   }
@@ -734,7 +831,7 @@ function renderPanel() {
   if (type === 'image') {
     document.getElementById('p_imgmode').addEventListener('change', (e) => {
       selected.setAttr('imageMode', e.target.value);
-      document.getElementById('p_threshold_label').style.display = e.target.value === 'bw' ? 'block' : 'none';
+      document.getElementById('p_threshold_label').style.display = e.target.value === 'bw' ? 'flex' : 'none';
       applyImageMode(selected);
     });
     document.getElementById('p_threshold').addEventListener('input', (e) => {
@@ -751,6 +848,7 @@ function renderPanel() {
 document.getElementById('addText').onclick = addText;
 document.getElementById('addQr').onclick = addQr;
 document.getElementById('addBorder').onclick = addBorder;
+document.getElementById('addLine').onclick = addLine;
 document.getElementById('addDate').onclick = addDateField;
 document.getElementById('addImageBtn').onclick = () => document.getElementById('imageInput').click();
 document.getElementById('imageInput').onchange = (e) => {
@@ -794,6 +892,9 @@ function serializeElement(node) {
   }
   if (type === 'border') {
     return Object.assign(base, { width: node.width(), height: node.height(), strokeWidth: node.strokeWidth() });
+  }
+  if (type === 'line') {
+    return Object.assign(base, { points: node.points(), strokeWidth: node.strokeWidth() });
   }
   if (type === 'image') {
     return Object.assign(base, {
@@ -849,6 +950,15 @@ function deserializeElement(desc) {
       stroke: 'black', strokeWidth: desc.strokeWidth, fill: null,
     });
     registerElement(node, 'border');
+    return;
+  }
+
+  if (desc.type === 'line') {
+    const node = new Konva.Line({
+      x: desc.x, y: desc.y, rotation: desc.rotation,
+      points: desc.points, stroke: 'black', strokeWidth: desc.strokeWidth, hitStrokeWidth: 24,
+    });
+    registerElement(node, 'line');
     return;
   }
 
