@@ -18,7 +18,7 @@
     /* Sized to hug its actual content (the canvas) — must NOT flex-grow past
        that, or the background visually extends past the true label edge
        while dragged elements still clip exactly at the real boundary. */
-    #stage-wrap { border: 1px solid #ccc; background: #fafafa; padding: 12px; display: inline-block; max-width: 100%; overflow-x: auto; flex: 0 0 auto; }
+    #stage-wrap { border: 1px solid #ccc; background: #fafafa; padding: 12px; display: inline-block; max-width: 100%; overflow-x: auto; flex: 0 0 auto; align-self: flex-start; }
     #stage-container { transform-origin: top left; }
 
     /* Property panel: full-width, controls arranged in a row and wrapping,
