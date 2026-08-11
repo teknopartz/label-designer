@@ -31,6 +31,12 @@
     .ok { color: #060; }
     .hint { font-size: 0.8rem; color: #888; }
     #iconPicker button { font-size: 1.6rem; padding: 6px 10px; margin: 2px; cursor: pointer; font-family: 'DejaVu Sans', sans-serif; }
+    .font-spinner {
+      display: inline-block; width: 12px; height: 12px; margin-right: 6px;
+      border: 2px solid #ccc; border-top-color: #666; border-radius: 50%;
+      animation: font-spin 0.7s linear infinite; vertical-align: middle;
+    }
+    @keyframes font-spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
@@ -491,6 +497,21 @@ function refreshFontFamilyOptions() {
   sel.innerHTML = Object.keys(installedFonts).sort().map(f => `<option value="${f}" ${f === current ? 'selected' : ''}>${f}</option>`).join('');
 }
 
+// Live preview of search results, loaded straight from Google's CDN — not
+// the same thing as Install. Preview is ephemeral (nothing saved to disk);
+// Install is the one that downloads and self-hosts the font permanently.
+const previewedFamilies = new Set(); // families already preview-loaded this session
+
+function loadFontPreview(family) {
+  if (previewedFamilies.has(family)) return Promise.resolve();
+  previewedFamilies.add(family);
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(family)}&display=swap`;
+  document.head.appendChild(link);
+  return document.fonts.load(`16px "${family}"`);
+}
+
 let fontSearchTimer = null;
 document.getElementById('fontSearch').addEventListener('input', (e) => {
   clearTimeout(fontSearchTimer);
@@ -500,9 +521,30 @@ document.getElementById('fontSearch').addEventListener('input', (e) => {
   fontSearchTimer = setTimeout(async () => {
     const res = await fetch('/api/fonts/search?q=' + encodeURIComponent(q));
     const fonts = await res.json();
-    results.innerHTML = fonts.map(f =>
-      `<div style="padding:4px 0;">${f.family} <button type="button" data-id="${f.id}" data-family="${f.family}" style="margin-left:6px;">${installedFonts[f.family] ? 'Installed' : 'Install'}</button></div>`
+
+    // Render immediately in the page's default font, each with a spinner,
+    // rather than waiting for every preview to load first.
+    results.innerHTML = fonts.map(f => `
+      <div class="row" style="margin-top:6px; align-items:center;">
+        <span class="font-spinner" id="spinner-${f.id}"></span>
+        <span id="preview-${f.id}" style="flex:1;">${f.family}</span>
+        <button type="button" data-id="${f.id}" data-family="${f.family}" style="width:auto; margin-top:0; padding:4px 10px;">${installedFonts[f.family] ? 'Installed' : 'Install'}</button>
+      </div>`
     ).join('');
+
+    fonts.forEach((f) => {
+      loadFontPreview(f.family)
+        .then(() => {
+          const span = document.getElementById(`preview-${f.id}`);
+          if (span) span.style.fontFamily = `"${f.family}"`;
+        })
+        .catch(() => { /* preview is best-effort; Install still works without it */ })
+        .finally(() => {
+          const spinner = document.getElementById(`spinner-${f.id}`);
+          if (spinner) spinner.remove();
+        });
+    });
+
     [...results.querySelectorAll('button')].forEach(btn => btn.onclick = async () => {
       btn.disabled = true;
       btn.textContent = 'Installing...';
