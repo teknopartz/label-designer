@@ -2,3 +2,9 @@ venv/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Runtime-generated on the Pi — installed fonts, cached icons, saved
+# templates. Deploys must never overwrite these.
+app/static/fonts/google/
+app/static/icons/
+app/data/templates/
