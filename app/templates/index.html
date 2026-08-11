@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Label Designer (Phase 2)</title>
+  <title>LabelSmith</title>
   <style>
     @font-face { font-family: 'DejaVu Sans'; src: url('/static/fonts/DejaVuSans.ttf') format('truetype'); font-weight: normal; font-style: normal; }
     @font-face { font-family: 'DejaVu Sans'; src: url('/static/fonts/DejaVuSans-Bold.ttf') format('truetype'); font-weight: bold; font-style: normal; }
@@ -18,7 +18,7 @@
     /* Sized to hug its actual content (the canvas) — must NOT flex-grow past
        that, or the background visually extends past the true label edge
        while dragged elements still clip exactly at the real boundary. */
-    #stage-wrap { border: 1px solid #ccc; background: #fafafa; padding: 12px; display: inline-block; max-width: 100%; overflow-x: auto; flex: 0 0 auto; align-self: flex-start; }
+    #stage-wrap { border: 1px solid #ccc; background: #fafafa; padding: 12px; display: inline-block; max-width: 100%; overflow-x: auto; flex: 0 0 auto; align-self: center; }
     #stage-container { transform-origin: top left; }
 
     /* Property panel: full-width, controls arranged in a row and wrapping,
@@ -67,21 +67,21 @@
   </style>
 </head>
 <body>
-  <h1>Label Designer — Phase 2 (62mm, multi-element)</h1>
+  <h1>🏷️ LabelSmith <span style="font-weight:normal; color:#888; font-size:0.75em;">— 62mm label designer</span></h1>
   <p class="hint">Click an element to select it (handles let you resize/rotate). Double-click text to edit. Drag to reposition.</p>
 
   <div class="toolbar">
-    <button id="addText">+ Text</button>
-    <button id="addImageBtn">+ Image</button>
+    <button id="addText">📝 Text</button>
+    <button id="addImageBtn">🖼️ Image</button>
     <input type="file" id="imageInput" accept="image/*" style="display:none">
-    <button id="addQr">+ QR code</button>
-    <button id="addBorder">+ Border</button>
-    <button id="addLine">+ Line</button>
-    <button id="addDate">+ Date</button>
-    <button id="addIconBtn">+ Icon</button>
-    <button id="addFontBtn">+ Font</button>
-    <button id="templatesBtn">Templates</button>
-    <button id="batchBtn">Batch print</button>
+    <button id="addQr">▦ QR code</button>
+    <button id="addBorder">⬜ Border</button>
+    <button id="addLine">➖ Line</button>
+    <button id="addDate">📅 Date</button>
+    <button id="addIconBtn">⭐ Icon</button>
+    <button id="addFontBtn">🔤 Font</button>
+    <button id="templatesBtn">📁 Templates</button>
+    <button id="batchBtn">🖨️ Batch print</button>
   </div>
   <div id="batchPanel" style="display:none; margin-bottom:12px; padding:8px; border:1px solid #ddd; border-radius:4px;">
     {% raw %}
@@ -120,7 +120,7 @@
   </div>
 
   <div class="actions">
-    <button id="printBtn">Print</button>
+    <button id="printBtn">🖨️ Print</button>
   </div>
   <div id="status"></div>
 
@@ -215,7 +215,10 @@ window.addEventListener('resize', scaleToViewport);
 const SNAP_THRESHOLD = 6; // px, in stage coordinates
 
 function getGuideStops(skipNode) {
-  const vertical = [0, LABEL_WIDTH / 2, LABEL_WIDTH];   // stage edges + center
+  // Snap to the printable margins, not the raw stage edges — content that
+  // snaps flush to x=0/LABEL_WIDTH would sit right at the roll's physical
+  // edge, which is exactly what margins exist to avoid.
+  const vertical = [MARGIN_LEFT, LABEL_WIDTH / 2, LABEL_WIDTH - MARGIN_RIGHT];
   const horizontal = [0];
   elements.forEach((el) => {
     if (el === skipNode) return;
