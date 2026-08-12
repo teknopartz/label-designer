@@ -20,9 +20,26 @@ ICON_SVG_URL = (
     'https://raw.githubusercontent.com/google/material-design-icons/master/'
     'symbols/web/{name}/materialsymbolsoutlined/{name}_24px.svg'
 )
+# Same repo's own version-tracking file, keyed "category::icon_name" — the
+# official taxonomy (18 real categories, plus an uncategorized "symbols"
+# catch-all we ignore). Separate from the codepoints file above, which is
+# just a flat name list with no grouping.
+ICON_VERSIONS_URL = (
+    'https://raw.githubusercontent.com/google/material-design-icons/master/'
+    'update/current_versions.json'
+)
+ICON_CATEGORY_LABELS = {
+    'action': 'Actions', 'alert': 'Alerts', 'av': 'Audio & Video',
+    'communication': 'Communication', 'content': 'Content', 'device': 'Devices',
+    'editor': 'Editor', 'file': 'Files', 'hardware': 'Hardware', 'home': 'Home',
+    'image': 'Images & Camera', 'maps': 'Maps', 'navigation': 'Navigation',
+    'notification': 'Notifications', 'places': 'Places', 'search': 'Search',
+    'social': 'People & Social', 'toggle': 'Toggles',
+}
 
 _font_list_cache = None
 _icon_name_cache = None
+_icon_categories_cache = None  # {category: [icon names]}
 
 # Google Fonts variant id -> (weight, style) pair we register as a webfont.
 # Matches the same normal/bold/italic/bold-italic set used for DejaVu Sans,
@@ -112,6 +129,38 @@ def search_icons(query, limit=30):
     q = query.lower().replace(' ', '_')
     matches = sorted(n for n in names if q in n)
     return matches[:limit]
+
+
+def _ensure_icon_categories_loaded():
+    global _icon_categories_cache
+    if _icon_categories_cache is not None:
+        return _icon_categories_cache
+
+    valid_names = _ensure_icon_names_loaded()
+    data = _fetch_json(ICON_VERSIONS_URL)
+    categories = {}
+    for key in data.keys():
+        category, name = key.split('::', 1)
+        if category == 'symbols' or name not in valid_names:
+            continue
+        categories.setdefault(category, []).append(name)
+    for names in categories.values():
+        names.sort()
+    _icon_categories_cache = categories
+    return _icon_categories_cache
+
+
+def list_icon_categories():
+    categories = _ensure_icon_categories_loaded()
+    return [
+        {'id': cat, 'label': ICON_CATEGORY_LABELS.get(cat, cat.title()), 'count': len(names)}
+        for cat, names in sorted(categories.items(), key=lambda kv: ICON_CATEGORY_LABELS.get(kv[0], kv[0]))
+    ]
+
+
+def icons_in_category(category, limit=200):
+    categories = _ensure_icon_categories_loaded()
+    return categories.get(category, [])[:limit]
 
 
 def get_icon_svg_path(name):

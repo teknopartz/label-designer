@@ -98,6 +98,24 @@ def icons_search():
         return jsonify(error=str(e)), 502
 
 
+@bp.route('/api/icons/categories')
+def icon_categories():
+    try:
+        return jsonify(assets.list_icon_categories())
+    except Exception as e:
+        current_app.logger.exception("Icon category list failed")
+        return jsonify(error=str(e)), 502
+
+
+@bp.route('/api/icons/categories/<category>')
+def icon_category(category):
+    try:
+        return jsonify(assets.icons_in_category(category))
+    except Exception as e:
+        current_app.logger.exception("Icon category fetch failed")
+        return jsonify(error=str(e)), 502
+
+
 @bp.route('/api/icons/<name>.svg')
 def icon_svg(name):
     try:
