@@ -22,9 +22,12 @@
     #stage-wrap { border: 1px solid #ccc; background: #fafafa; padding: 12px; display: inline-block; max-width: 100%; overflow-x: auto; flex: 0 0 auto; align-self: center; }
     #stage-container { transform-origin: top left; }
 
-    /* Property panel: full-width, controls arranged in a row and wrapping,
-       sized for touch rather than a narrow desktop sidebar. */
-    #panel { width: 100%; box-sizing: border-box; border: 1px solid #ddd; border-radius: 4px; padding: 16px; font-size: 0.95rem; transition: opacity 0.15s; }
+    /* Property panel: shares the .dropdown-panel card chrome (border/
+       radius/background/shadow) so it looks like the same single area as
+       the Font/Icon/Templates pickers, just with its own content layout —
+       controls arranged in a row and wrapping, sized for touch rather than
+       a narrow desktop sidebar. */
+    #panel { width: 100%; box-sizing: border-box; font-size: 0.95rem; transition: opacity 0.15s; }
     #panel.disabled { opacity: 0.45; pointer-events: none; }
     #panel h2 { font-size: 0.95rem; margin: 0 0 12px; color: #555; }
     #panel .field { display: flex; flex-direction: column; gap: 4px; }
@@ -52,7 +55,7 @@
     .font-dropdown-item:hover, .font-dropdown-item:focus { background: #f0f6ff; }
     .font-dropdown-item.selected { background: #e6f0ff; }
 
-    .actions { margin-top: 16px; display: flex; justify-content: flex-end; }
+    .actions { margin-top: 8px; display: flex; justify-content: flex-end; }
     .actions button { padding: 10px 20px; font-size: 1rem; cursor: pointer; }
     #status { margin-top: 12px; font-size: 0.9rem; min-height: 1.2em; text-align: right; }
     .error { color: #b00; }
@@ -90,6 +93,10 @@
     <button id="addFontBtn">🔤 Font</button>
     <button id="templatesBtn">📁 Templates</button>
   </div>
+  <!-- Single shared panel slot: exactly one of these is visible at a time,
+       whichever is currently relevant — a selected element's properties, or
+       a toolbar dropdown (Font/Icon/Templates search). See showTopPanel(). -->
+  <div id="panel" class="dropdown-panel disabled"><div class="empty">Nothing selected</div></div>
   <div id="templatesPanel" class="dropdown-panel" style="display:none;">
     <div class="dropdown-panel-header"><h3>Templates</h3><button type="button" class="dropdown-close" data-target="templatesPanel">✕</button></div>
     <div class="row" style="margin-top:0;">
@@ -112,7 +119,6 @@
 
   <div class="layout">
     <div id="stage-wrap"><div id="stage-container"></div></div>
-    <div id="panel" class="disabled"><div class="empty">Nothing selected</div></div>
   </div>
 
   <div class="actions">
@@ -173,12 +179,13 @@ let selected = null; // currently selected node
 
 // ---------- selection ----------
 
-function select(node) {
+function select(node, keepDropdownOpen) {
   selected = node;
   transformer.nodes(node ? [node] : []);
   layer.draw();
   const panel = document.getElementById('panel');
   if (node) {
+    if (!keepDropdownOpen) showTopPanel('panel');
     panel.classList.remove('disabled');
     renderPanel();
   } else {
@@ -297,7 +304,7 @@ function clearGuides() {
   guideLayer.batchDraw();
 }
 
-function registerElement(node, type) {
+function registerElement(node, type, keepDropdownOpen) {
   node.setAttr('elementType', type);
   node.draggable(true);
   node.on('dragmove', () => snapOnDragMove(node));
@@ -338,7 +345,7 @@ function registerElement(node, type) {
   elements.push(node);
   layer.add(node);
   transformer.moveToTop();
-  select(node);
+  select(node, keepDropdownOpen);
   recalcStageSize();
 }
 
@@ -569,9 +576,11 @@ function insertIcon(glyph) {
     align: 'center',
   });
   pinTextWidth(node);
-  registerElement(node, 'text');
-  // Deliberately NOT closing the picker — inserting several icons in a row
-  // shouldn't mean reopening it each time. Closed via its own ✕ button.
+  registerElement(node, 'text', true);
+  // Deliberately NOT closing the picker (keepDropdownOpen) — inserting
+  // several icons in a row shouldn't mean reopening it each time, and
+  // shouldn't bump it out of the shared panel slot for the new element's
+  // properties either. Closed via its own ✕ button.
 }
 
 function insertIconImage(svgUrl) {
@@ -583,7 +592,7 @@ function insertIconImage(svgUrl) {
       image: img,
       width: size, height: size,
     });
-    registerElement(node, 'image');
+    registerElement(node, 'image', true);
     // Left open, same reasoning as insertIcon() — closed via its own ✕.
   };
   img.src = svgUrl;
@@ -697,28 +706,30 @@ document.getElementById('fontSearch').addEventListener('input', (e) => {
   }, 400);
 });
 
-// The three toolbar dropdowns (Font/Icon/Templates) share consistent
-// styling and behavior: opening one closes any other that's open, and each
-// has its own ✕ to dismiss explicitly rather than auto-closing on its own
-// (the icon picker in particular needs to stay open across multiple inserts).
-const DROPDOWN_PANEL_IDS = ['fontPicker', 'iconPicker', 'templatesPanel'];
+// One shared panel slot above the canvas: the property panel and the three
+// toolbar dropdowns (Font/Icon/Templates) all live in the same place, and
+// exactly one of them is visible at a time — whichever is currently
+// relevant — instead of a dropdown and the property panel both showing at
+// once in two separate areas.
+const TOP_PANEL_IDS = ['panel', 'fontPicker', 'iconPicker', 'templatesPanel'];
 
-function closeAllDropdowns() {
-  DROPDOWN_PANEL_IDS.forEach(id => { document.getElementById(id).style.display = 'none'; });
+function showTopPanel(id) {
+  TOP_PANEL_IDS.forEach(pid => { document.getElementById(pid).style.display = pid === id ? 'block' : 'none'; });
 }
 
 function toggleDropdown(id, onOpen) {
   const el = document.getElementById(id);
   const opening = el.style.display === 'none';
-  closeAllDropdowns();
   if (opening) {
-    el.style.display = 'block';
+    showTopPanel(id);
     if (onOpen) onOpen();
+  } else {
+    showTopPanel('panel');
   }
 }
 
 document.querySelectorAll('.dropdown-close').forEach(btn => {
-  btn.addEventListener('click', () => { document.getElementById(btn.dataset.target).style.display = 'none'; });
+  btn.addEventListener('click', () => showTopPanel('panel'));
 });
 
 document.getElementById('addFontBtn').onclick = () => toggleDropdown('fontPicker');
@@ -1121,7 +1132,7 @@ async function refreshTemplateList() {
       if (btn.dataset.action === 'load') {
         const res = await fetch('/api/templates/' + encodeURIComponent(name));
         loadTemplateData(await res.json());
-        document.getElementById('templatesPanel').style.display = 'none';
+        showTopPanel('panel');
       } else {
         await fetch('/api/templates/' + encodeURIComponent(name), { method: 'DELETE' });
         refreshTemplateList();
