@@ -11,9 +11,10 @@
     @font-face { font-family: 'DejaVu Sans'; src: url('/static/fonts/DejaVuSans-BoldOblique.ttf') format('truetype'); font-weight: bold; font-style: italic; }
 
     body { font-family: system-ui, sans-serif; max-width: 1100px; margin: 32px auto; padding: 0 16px; color: #333; }
-    h1 { font-size: 1.1rem; color: #444; }
+    h1 { font-size: 1.1rem; color: #444; text-align: center; }
+    .page-hint { text-align: center; color: #888; font-size: 0.8rem; }
     .layout { display: flex; flex-direction: column; gap: 16px; }
-    .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    .toolbar { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
     .toolbar button { padding: 10px 16px; font-size: 0.95rem; cursor: pointer; }
     /* Sized to hug its actual content (the canvas) — must NOT flex-grow past
        that, or the background visually extends past the true label edge
@@ -51,9 +52,9 @@
     .font-dropdown-item:hover, .font-dropdown-item:focus { background: #f0f6ff; }
     .font-dropdown-item.selected { background: #e6f0ff; }
 
-    .actions { margin-top: 16px; }
+    .actions { margin-top: 16px; display: flex; justify-content: flex-end; }
     .actions button { padding: 10px 20px; font-size: 1rem; cursor: pointer; }
-    #status { margin-top: 12px; font-size: 0.9rem; min-height: 1.2em; }
+    #status { margin-top: 12px; font-size: 0.9rem; min-height: 1.2em; text-align: right; }
     .error { color: #b00; }
     .ok { color: #060; }
     .hint { font-size: 0.8rem; color: #888; }
@@ -76,13 +77,12 @@
 </head>
 <body>
   <h1>🏷️ LabelSmith <span style="font-weight:normal; color:#888; font-size:0.75em;">— 62mm label designer</span></h1>
-  <p class="hint">Click an element to select it (handles let you resize/rotate). Double-click text to edit. Drag to reposition.</p>
+  <p class="page-hint">Click an element to select it (handles let you resize/rotate). Double-click text to edit. Drag to reposition.</p>
 
   <div class="toolbar">
     <button id="addText">📝 Text</button>
     <button id="addImageBtn">🖼️ Image</button>
     <input type="file" id="imageInput" accept="image/*" style="display:none">
-    <button id="addQr">▦ QR code</button>
     <button id="addBorder">⬜ Border</button>
     <button id="addLine">➖ Line</button>
     <button id="addDate">📅 Date</button>
@@ -121,7 +121,6 @@
   <div id="status"></div>
 
 <script src="/static/vendor/konva.min.js"></script>
-<script src="/static/vendor/qrcode.min.js"></script>
 {% raw %}
 <script>
 const LABEL_WIDTH = 696;
@@ -376,26 +375,62 @@ function editText(node) {
   node.hide();
   layer.draw();
 
-  const rect = stage.container().getBoundingClientRect();
-  const scale = stage.scaleX() || (parseFloat(document.getElementById('stage-container').style.transform.replace(/[^0-9.]/g, '')) || 1);
   const area = document.createElement('textarea');
+  area.rows = 1;
+  area.wrap = 'off';
   document.body.appendChild(area);
   area.value = node.text();
   Object.assign(area.style, {
-    position: 'fixed',
-    top: (rect.top + node.y() * scale) + 'px',
-    left: (rect.left + node.x() * scale) + 'px',
-    width: Math.max(120, node.width() * scale) + 'px',
-    fontSize: (node.fontSize() * scale) + 'px',
-    fontFamily: node.fontFamily(),
-    fontWeight: node.fontStyle().includes('bold') ? 'bold' : 'normal',
-    fontStyle: node.fontStyle().includes('italic') ? 'italic' : 'normal',
-    border: '1px solid #888', padding: '0', margin: '0', background: 'white', outline: 'none', resize: 'none',
+    position: 'absolute',
+    boxSizing: 'border-box',
+    lineHeight: (node.lineHeight ? node.lineHeight() : 1),
+    whiteSpace: 'pre',
+    border: '1px solid #888', padding: '0', margin: '0', background: 'white', outline: 'none', resize: 'none', overflowX: 'auto', overflowY: 'hidden',
   });
+
+  // Recomputed on every call rather than once, and anchored to document flow
+  // (position:absolute + scrollX/Y) rather than position:fixed, because
+  // opening the on-screen keyboard on Android resizes/scrolls the viewport
+  // and fixed-position elements drift away from the canvas underneath them.
+  // Height is sized to the textarea's own rendered content (auto-grow),
+  // not node.height(): Konva wraps text using canvas font-metrics, the
+  // textarea wraps using the browser's own — they can disagree on line
+  // count, and trusting Konva's number left the box taller than the text
+  // actually visible inside it.
+  function autoHeight() {
+    area.style.height = 'auto';
+    area.style.height = area.scrollHeight + 'px';
+  }
+  function reposition() {
+    const rect = stage.container().getBoundingClientRect();
+    const scale = stage.scaleX() || (parseFloat(document.getElementById('stage-container').style.transform.replace(/[^0-9.]/g, '')) || 1);
+    Object.assign(area.style, {
+      top: (rect.top + window.scrollY + node.y() * scale) + 'px',
+      left: (rect.left + window.scrollX + node.x() * scale) + 'px',
+      width: Math.max(120, node.width() * scale) + 'px',
+      fontSize: (node.fontSize() * scale) + 'px',
+      fontFamily: node.fontFamily(),
+      fontWeight: node.fontStyle().includes('bold') ? 'bold' : 'normal',
+      fontStyle: node.fontStyle().includes('italic') ? 'italic' : 'normal',
+    });
+    autoHeight();
+  }
+  reposition();
+  area.addEventListener('input', autoHeight);
   area.focus();
+
+  const vv = window.visualViewport;
+  vv && vv.addEventListener('resize', reposition);
+  vv && vv.addEventListener('scroll', reposition);
+  window.addEventListener('scroll', reposition);
+  window.addEventListener('resize', reposition);
 
   function finish() {
     node.text(area.value);
+    vv && vv.removeEventListener('resize', reposition);
+    vv && vv.removeEventListener('scroll', reposition);
+    window.removeEventListener('scroll', reposition);
+    window.removeEventListener('resize', reposition);
     document.body.removeChild(area);
     node.show();
     select(node);
@@ -686,30 +721,6 @@ document.querySelectorAll('.dropdown-close').forEach(btn => {
 
 document.getElementById('addFontBtn').onclick = () => toggleDropdown('fontPicker');
 
-// ---------- QR elements ----------
-
-function addQr() {
-  const canvas = document.createElement('canvas');
-  QRCode.toCanvas(canvas, 'https://example.com', { margin: 0, width: 160 }, () => {
-    const node = new Konva.Image({
-      x: MARGIN_LEFT, y: MARGIN_TOP,
-      image: canvas,
-      width: 160, height: 160,
-    });
-    node.setAttr('qrText', 'https://example.com');
-    registerElement(node, 'qr');
-  });
-}
-
-function updateQrContent(node, text) {
-  const canvas = document.createElement('canvas');
-  QRCode.toCanvas(canvas, text || ' ', { margin: 0, width: 160 }, () => {
-    node.image(canvas);
-    node.setAttr('qrText', text);
-    layer.draw();
-  });
-}
-
 // ---------- border/rectangle and line elements ----------
 
 const BORDER_STYLES = [
@@ -832,10 +843,6 @@ function renderPanel() {
       </div>`;
   }
 
-  if (type === 'qr') {
-    html += `<div class="field grow"><label>Content</label><input type="text" id="p_qrtext" value="${(selected.getAttr('qrText') || '').replace(/"/g, '&quot;')}"></div>`;
-  }
-
   if (type === 'border' || type === 'line') {
     const width = selected.strokeWidth();
     const currentStyle = selected.getAttr('borderStyle') || 'solid';
@@ -925,10 +932,6 @@ function renderPanel() {
     document.getElementById('p_italic').addEventListener('change', applyStyle);
   }
 
-  if (type === 'qr') {
-    document.getElementById('p_qrtext').addEventListener('change', (e) => updateQrContent(selected, e.target.value));
-  }
-
   if (type === 'border' || type === 'line') {
     document.getElementById('p_strokewidth').addEventListener('input', (e) => {
       const width = parseInt(e.target.value, 10) || 1;
@@ -961,7 +964,6 @@ function renderPanel() {
 // ---------- toolbar wiring ----------
 
 document.getElementById('addText').onclick = addText;
-document.getElementById('addQr').onclick = addQr;
 document.getElementById('addBorder').onclick = addBorder;
 document.getElementById('addLine').onclick = addLine;
 document.getElementById('addDate').onclick = addDateField;
@@ -970,6 +972,16 @@ document.getElementById('imageInput').onchange = (e) => {
   if (e.target.files[0]) addImageFromFile(e.target.files[0]);
   e.target.value = '';
 };
+
+// Even column widths across the toolbar, sized to whichever button is
+// widest, rather than each button hugging its own label.
+function equalizeToolbarButtonWidths() {
+  const buttons = document.querySelectorAll('.toolbar > button');
+  buttons.forEach(b => { b.style.width = ''; });
+  const max = Math.max(...[...buttons].map(b => b.offsetWidth));
+  buttons.forEach(b => { b.style.width = max + 'px'; });
+}
+equalizeToolbarButtonWidths();
 
 const iconStarter = document.getElementById('iconStarter');
 iconStarter.innerHTML = STARTER_ICONS.map(g => `<button type="button">${g}</button>`).join('');
@@ -999,9 +1011,6 @@ function serializeElement(node) {
       isDateField: !!node.getAttr('isDateField'),
       dateFormat: node.getAttr('dateFormat') || null,
     });
-  }
-  if (type === 'qr') {
-    return Object.assign(base, { width: node.width(), height: node.height(), qrText: node.getAttr('qrText') });
   }
   if (type === 'border') {
     return Object.assign(base, { width: node.width(), height: node.height(), strokeWidth: node.strokeWidth(), borderStyle: node.getAttr('borderStyle') });
@@ -1043,19 +1052,6 @@ function deserializeElement(desc) {
       node.text(formatDate(node.getAttr('dateValue'), desc.dateFormat));
     }
     registerElement(node, 'text');
-    return;
-  }
-
-  if (desc.type === 'qr') {
-    const canvas = document.createElement('canvas');
-    QRCode.toCanvas(canvas, desc.qrText || ' ', { margin: 0, width: 160 }, () => {
-      const node = new Konva.Image({
-        x: desc.x, y: desc.y, rotation: desc.rotation,
-        image: canvas, width: desc.width, height: desc.height,
-      });
-      node.setAttr('qrText', desc.qrText);
-      registerElement(node, 'qr');
-    });
     return;
   }
 
