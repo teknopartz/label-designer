@@ -377,15 +377,13 @@ function editText(node) {
 
   const area = document.createElement('textarea');
   area.rows = 1;
-  area.wrap = 'off';
   document.body.appendChild(area);
   area.value = node.text();
   Object.assign(area.style, {
     position: 'absolute',
     boxSizing: 'border-box',
     lineHeight: (node.lineHeight ? node.lineHeight() : 1),
-    whiteSpace: 'pre',
-    border: '1px solid #888', padding: '0', margin: '0', background: 'white', outline: 'none', resize: 'none', overflowX: 'auto', overflowY: 'hidden',
+    border: '1px solid #888', padding: '0', margin: '0', background: 'white', outline: 'none', resize: 'none', overflow: 'hidden',
   });
 
   // Recomputed on every call rather than once, and anchored to document flow
@@ -407,7 +405,11 @@ function editText(node) {
     Object.assign(area.style, {
       top: (rect.top + window.scrollY + node.y() * scale) + 'px',
       left: (rect.left + window.scrollX + node.x() * scale) + 'px',
-      width: Math.max(120, node.width() * scale) + 'px',
+      // +8px buffer: Konva measures text width via canvas, the textarea via
+      // its own DOM layout — they can disagree by a couple pixels, and
+      // without slack that was enough to wrap the last word onto a phantom
+      // second line.
+      width: (Math.max(120, node.width() * scale) + 8) + 'px',
       fontSize: (node.fontSize() * scale) + 'px',
       fontFamily: node.fontFamily(),
       fontWeight: node.fontStyle().includes('bold') ? 'bold' : 'normal',
