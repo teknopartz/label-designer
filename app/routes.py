@@ -60,12 +60,24 @@ def print_label():
 @bp.route('/api/fonts/search')
 def fonts_search():
     q = request.args.get('q', '')
-    if len(q) < 2:
+    category = request.args.get('category') or None
+    # A category browse needs no query text; a plain name search still
+    # needs at least a couple characters to avoid dumping the whole list.
+    if len(q) < 2 and not category:
         return jsonify([])
     try:
-        return jsonify(assets.search_fonts(q))
+        return jsonify(assets.search_fonts(q, category=category))
     except Exception as e:
         current_app.logger.exception("Font search failed")
+        return jsonify(error=str(e)), 502
+
+
+@bp.route('/api/fonts/categories')
+def font_categories():
+    try:
+        return jsonify(assets.list_font_categories())
+    except Exception as e:
+        current_app.logger.exception("Font category list failed")
         return jsonify(error=str(e)), 502
 
 

@@ -64,13 +64,38 @@ def _fetch_text(url):
         return r.read().decode('utf-8')
 
 
-def search_fonts(query, limit=20):
+FONT_CATEGORY_LABELS = {
+    'sans-serif': 'Sans Serif', 'serif': 'Serif', 'display': 'Display',
+    'handwriting': 'Handwriting', 'monospace': 'Monospace',
+}
+
+
+def _ensure_font_list_loaded():
     global _font_list_cache
     if _font_list_cache is None:
         _font_list_cache = _fetch_json(GWFH_LIST_URL)
-    q = query.lower()
-    matches = [f for f in _font_list_cache if q in f['family'].lower()]
+    return _font_list_cache
+
+
+def search_fonts(query='', category=None, limit=60):
+    fonts = _ensure_font_list_loaded()
+    q = (query or '').lower()
+    matches = [
+        f for f in fonts
+        if q in f['family'].lower() and (category is None or f['category'] == category)
+    ]
     return [{'id': f['id'], 'family': f['family'], 'category': f['category']} for f in matches[:limit]]
+
+
+def list_font_categories():
+    fonts = _ensure_font_list_loaded()
+    counts = {}
+    for f in fonts:
+        counts[f['category']] = counts.get(f['category'], 0) + 1
+    return [
+        {'id': cat, 'label': FONT_CATEGORY_LABELS.get(cat, cat.title()), 'count': count}
+        for cat, count in sorted(counts.items(), key=lambda kv: FONT_CATEGORY_LABELS.get(kv[0], kv[0]))
+    ]
 
 
 def _load_manifest():
@@ -158,7 +183,7 @@ def list_icon_categories():
     ]
 
 
-def icons_in_category(category, limit=200):
+def icons_in_category(category, limit=60):
     categories = _ensure_icon_categories_loaded()
     return categories.get(category, [])[:limit]
 

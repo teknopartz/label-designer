@@ -70,6 +70,12 @@
     .dropdown-panel-header h3 { margin: 0; font-size: 1rem; color: #444; }
     .dropdown-close { width: auto; margin-top: 0; padding: 4px 12px; font-size: 1rem; line-height: 1.2; cursor: pointer; background: #eee; border: 1px solid #ccc; border-radius: 4px; }
     #iconPicker button { font-size: 1.6rem; padding: 6px 10px; margin: 2px; cursor: pointer; font-family: 'DejaVu Sans', sans-serif; }
+
+    /* Category chips for browsing the Font/Icon libraries — an alternative
+       to typing a name you might not know. */
+    .chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+    #iconPicker .chip, .chip { width: auto; margin: 0; padding: 6px 12px; font-size: 0.85rem; font-family: system-ui, sans-serif; border: 1px solid #bbb; border-radius: 999px; background: white; cursor: pointer; }
+    .chip.active { background: #2563eb; color: white; border-color: #2563eb; }
     .font-spinner {
       display: inline-block; width: 12px; height: 12px; margin-right: 6px;
       border: 2px solid #ccc; border-top-color: #666; border-radius: 50%;
@@ -108,12 +114,14 @@
   <div id="iconPicker" class="dropdown-panel" style="display:none;">
     <div class="dropdown-panel-header"><h3>Icons</h3><button type="button" class="dropdown-close" data-target="iconPicker">✕</button></div>
     <div id="iconStarter"></div>
-    <input type="text" id="iconSearch" placeholder="Search more icons (Material Symbols)..." style="width:100%; margin-top:8px; box-sizing:border-box;">
+    <div id="iconCategories" style="margin-top:10px;"></div>
+    <input type="text" id="iconSearch" placeholder="Or search by name (Material Symbols)..." style="width:100%; margin-top:8px; box-sizing:border-box;">
     <div id="iconResults" style="margin-top:6px;"></div>
   </div>
   <div id="fontPicker" class="dropdown-panel" style="display:none;">
     <div class="dropdown-panel-header"><h3>Fonts</h3><button type="button" class="dropdown-close" data-target="fontPicker">✕</button></div>
-    <input type="text" id="fontSearch" placeholder="Search Google Fonts..." style="width:100%; box-sizing:border-box;">
+    <div id="fontCategories"></div>
+    <input type="text" id="fontSearch" placeholder="Or search Google Fonts by name..." style="width:100%; box-sizing:border-box;">
     <div id="fontResults" style="margin-top:6px; font-size:0.85rem;"></div>
   </div>
 
@@ -598,19 +606,50 @@ function insertIconImage(svgUrl) {
   img.src = svgUrl;
 }
 
+function renderIconResults(names) {
+  const results = document.getElementById('iconResults');
+  results.innerHTML = names.map(n => `<button type="button" data-name="${n}" title="${n}"><img src="/api/icons/${n}.svg" width="28" height="28" loading="lazy"></button>`).join('');
+  [...results.children].forEach(btn => btn.onclick = () => insertIconImage(`/api/icons/${btn.dataset.name}.svg`));
+}
+
 let iconSearchTimer = null;
 document.getElementById('iconSearch').addEventListener('input', (e) => {
   clearTimeout(iconSearchTimer);
   const q = e.target.value.trim();
-  const results = document.getElementById('iconResults');
-  if (q.length < 2) { results.innerHTML = ''; return; }
+  if (q) document.querySelectorAll('#iconCategories .chip').forEach(c => c.classList.remove('active'));
+  if (q.length < 2) { document.getElementById('iconResults').innerHTML = ''; return; }
   iconSearchTimer = setTimeout(async () => {
     const res = await fetch('/api/icons/search?q=' + encodeURIComponent(q));
-    const names = await res.json();
-    results.innerHTML = names.map(n => `<button type="button" data-name="${n}" title="${n}"><img src="/api/icons/${n}.svg" width="28" height="28"></button>`).join('');
-    [...results.children].forEach(btn => btn.onclick = () => insertIconImage(`/api/icons/${btn.dataset.name}.svg`));
+    renderIconResults(await res.json());
   }, 350);
 });
+
+// Browsing by category exists for exactly the situation search can't help
+// with: you know roughly what you want ("something for weather") but not
+// the exact Material Symbols name.
+let iconCategoriesCache = null;
+
+async function renderIconCategoryChips() {
+  const container = document.getElementById('iconCategories');
+  if (!iconCategoriesCache) {
+    const res = await fetch('/api/icons/categories');
+    iconCategoriesCache = await res.json();
+  }
+  container.innerHTML = `<div class="chip-row">${iconCategoriesCache.map(c =>
+    `<button type="button" class="chip" data-cat="${c.id}">${c.label} (${c.count})</button>`
+  ).join('')}</div>`;
+  [...container.querySelectorAll('.chip')].forEach(chip => {
+    chip.onclick = async () => {
+      const wasActive = chip.classList.contains('active');
+      container.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+      document.getElementById('iconSearch').value = '';
+      if (wasActive) { document.getElementById('iconResults').innerHTML = ''; return; }
+      chip.classList.add('active');
+      const res = await fetch('/api/icons/categories/' + encodeURIComponent(chip.dataset.cat));
+      renderIconResults(await res.json());
+    };
+  });
+}
 
 // ---------- font library ----------
 // DejaVu Sans (the four weights already on the Pi) plus any Google Fonts
@@ -652,59 +691,90 @@ function loadFontPreview(family) {
   return document.fonts.load(`16px "${family}"`);
 }
 
+function renderFontResults(fonts) {
+  const results = document.getElementById('fontResults');
+
+  // Render immediately in the page's default font, each with a spinner,
+  // rather than waiting for every preview to load first.
+  results.innerHTML = fonts.map(f => `
+    <div class="row" style="margin-top:6px; align-items:center;">
+      <span class="font-spinner" id="spinner-${f.id}"></span>
+      <span id="preview-${f.id}" style="flex:1;">${f.family}</span>
+      <button type="button" data-id="${f.id}" data-family="${f.family}" style="width:auto; margin-top:0; padding:4px 10px;">${installedFonts[f.family] ? 'Installed' : 'Install'}</button>
+    </div>`
+  ).join('');
+
+  fonts.forEach((f) => {
+    loadFontPreview(f.family)
+      .then(() => {
+        const span = document.getElementById(`preview-${f.id}`);
+        if (span) span.style.fontFamily = `"${f.family}"`;
+      })
+      .catch(() => { /* preview is best-effort; Install still works without it */ })
+      .finally(() => {
+        const spinner = document.getElementById(`spinner-${f.id}`);
+        if (spinner) spinner.remove();
+      });
+  });
+
+  [...results.querySelectorAll('button')].forEach(btn => btn.onclick = async () => {
+    btn.disabled = true;
+    btn.textContent = 'Installing...';
+    const r = await fetch('/api/fonts/install', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: btn.dataset.id }),
+    });
+    const data = await r.json();
+    if (data.family) {
+      await registerGoogleFontFamily(data.family, data.files);
+      if (selected && selected.getAttr('elementType') === 'text') {
+        selected.fontFamily(data.family);
+        renderPanel();
+        recalcStageSize();
+      }
+    }
+    btn.textContent = 'Installed';
+  });
+}
+
 let fontSearchTimer = null;
 document.getElementById('fontSearch').addEventListener('input', (e) => {
   clearTimeout(fontSearchTimer);
   const q = e.target.value.trim();
-  const results = document.getElementById('fontResults');
-  if (q.length < 2) { results.innerHTML = ''; return; }
+  if (q) document.querySelectorAll('#fontCategories .chip').forEach(c => c.classList.remove('active'));
+  if (q.length < 2) { document.getElementById('fontResults').innerHTML = ''; return; }
   fontSearchTimer = setTimeout(async () => {
     const res = await fetch('/api/fonts/search?q=' + encodeURIComponent(q));
-    const fonts = await res.json();
-
-    // Render immediately in the page's default font, each with a spinner,
-    // rather than waiting for every preview to load first.
-    results.innerHTML = fonts.map(f => `
-      <div class="row" style="margin-top:6px; align-items:center;">
-        <span class="font-spinner" id="spinner-${f.id}"></span>
-        <span id="preview-${f.id}" style="flex:1;">${f.family}</span>
-        <button type="button" data-id="${f.id}" data-family="${f.family}" style="width:auto; margin-top:0; padding:4px 10px;">${installedFonts[f.family] ? 'Installed' : 'Install'}</button>
-      </div>`
-    ).join('');
-
-    fonts.forEach((f) => {
-      loadFontPreview(f.family)
-        .then(() => {
-          const span = document.getElementById(`preview-${f.id}`);
-          if (span) span.style.fontFamily = `"${f.family}"`;
-        })
-        .catch(() => { /* preview is best-effort; Install still works without it */ })
-        .finally(() => {
-          const spinner = document.getElementById(`spinner-${f.id}`);
-          if (spinner) spinner.remove();
-        });
-    });
-
-    [...results.querySelectorAll('button')].forEach(btn => btn.onclick = async () => {
-      btn.disabled = true;
-      btn.textContent = 'Installing...';
-      const r = await fetch('/api/fonts/install', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: btn.dataset.id }),
-      });
-      const data = await r.json();
-      if (data.family) {
-        await registerGoogleFontFamily(data.family, data.files);
-        if (selected && selected.getAttr('elementType') === 'text') {
-          selected.fontFamily(data.family);
-          renderPanel();
-          recalcStageSize();
-        }
-      }
-      btn.textContent = 'Installed';
-    });
+    renderFontResults(await res.json());
   }, 400);
 });
+
+// Browsing by category (serif/sans-serif/display/handwriting/monospace) —
+// same rationale as the icon categories: you often don't know font names
+// well enough for a search box to be useful on its own.
+let fontCategoriesCache = null;
+
+async function renderFontCategoryChips() {
+  const container = document.getElementById('fontCategories');
+  if (!fontCategoriesCache) {
+    const res = await fetch('/api/fonts/categories');
+    fontCategoriesCache = await res.json();
+  }
+  container.innerHTML = `<div class="chip-row">${fontCategoriesCache.map(c =>
+    `<button type="button" class="chip" data-cat="${c.id}">${c.label} (${c.count})</button>`
+  ).join('')}</div>`;
+  [...container.querySelectorAll('.chip')].forEach(chip => {
+    chip.onclick = async () => {
+      const wasActive = chip.classList.contains('active');
+      container.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+      document.getElementById('fontSearch').value = '';
+      if (wasActive) { document.getElementById('fontResults').innerHTML = ''; return; }
+      chip.classList.add('active');
+      const res = await fetch('/api/fonts/search?category=' + encodeURIComponent(chip.dataset.cat));
+      renderFontResults(await res.json());
+    };
+  });
+}
 
 // One shared panel slot above the canvas: the property panel and the three
 // toolbar dropdowns (Font/Icon/Templates) all live in the same place, and
@@ -732,7 +802,7 @@ document.querySelectorAll('.dropdown-close').forEach(btn => {
   btn.addEventListener('click', () => showTopPanel('panel'));
 });
 
-document.getElementById('addFontBtn').onclick = () => toggleDropdown('fontPicker');
+document.getElementById('addFontBtn').onclick = () => toggleDropdown('fontPicker', renderFontCategoryChips);
 
 // ---------- border/rectangle and line elements ----------
 
@@ -745,7 +815,10 @@ const BORDER_STYLES = [
 
 function applyBorderStyle(node, style) {
   node.setAttr('borderStyle', style);
-  node.cornerRadius(0);
+  // Konva.Line has no cornerRadius — only Konva.Rect (used for 'border')
+  // supports it, and the panel already hides the 'rounded' choice for lines.
+  const hasCornerRadius = typeof node.cornerRadius === 'function';
+  if (hasCornerRadius) node.cornerRadius(0);
   node.lineCap('butt');
   switch (style) {
     case 'dashed':
@@ -757,7 +830,7 @@ function applyBorderStyle(node, style) {
       break;
     case 'rounded':
       node.dash([]);
-      node.cornerRadius(14);
+      if (hasCornerRadius) node.cornerRadius(14);
       break;
     default:
       node.dash([]);
@@ -999,7 +1072,7 @@ equalizeToolbarButtonWidths();
 const iconStarter = document.getElementById('iconStarter');
 iconStarter.innerHTML = STARTER_ICONS.map(g => `<button type="button">${g}</button>`).join('');
 [...iconStarter.children].forEach((btn, i) => btn.onclick = () => insertIcon(STARTER_ICONS[i]));
-document.getElementById('addIconBtn').onclick = () => toggleDropdown('iconPicker');
+document.getElementById('addIconBtn').onclick = () => toggleDropdown('iconPicker', renderIconCategoryChips);
 
 // ---------- templates (save/load named designs) ----------
 
