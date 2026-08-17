@@ -11,11 +11,17 @@
     @font-face { font-family: 'DejaVu Sans'; src: url('/static/fonts/DejaVuSans-BoldOblique.ttf') format('truetype'); font-weight: bold; font-style: italic; }
 
     body { font-family: system-ui, sans-serif; max-width: 1100px; margin: 32px auto; padding: 0 16px; color: #333; }
-    h1 { font-size: 1.1rem; color: #444; text-align: center; }
-    .page-hint { text-align: center; color: #888; font-size: 0.8rem; }
+    h1 { font-size: clamp(2.4rem, 7vw, 4.5rem); color: #444; text-align: center; margin: 0 0 20px; line-height: 1.15; }
+    .title-emoji { font-size: 1.35em; vertical-align: -0.08em; }
+    .title-letter { display: inline-block; }
+    .title-sub { display: block; font-weight: normal; color: #888; font-size: 0.25em; margin-top: 8px; }
     .layout { display: flex; flex-direction: column; gap: 16px; position: relative; }
-    .toolbar { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-    .toolbar button { padding: 10px 16px; font-size: 0.95rem; cursor: pointer; }
+    /* Grid (not flex) so button width stays consistent across wrapped
+       rows — columns are sized once for the whole toolbar and reused on
+       every row, so a short last row leaves blank space on the right
+       instead of stretching its lone button to fill the row by itself. */
+    .toolbar { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 12px; }
+    .toolbar button { padding: 14px 16px; font-size: 1.05rem; cursor: pointer; }
     /* Sized to hug its actual content (the canvas) — must NOT flex-grow past
        that, or the background visually extends past the true label edge
        while dragged elements still clip exactly at the real boundary. */
@@ -97,8 +103,7 @@
   </style>
 </head>
 <body>
-  <h1>🏷️ LabelSmith <span style="font-weight:normal; color:#888; font-size:0.75em;">— 62mm label designer</span></h1>
-  <p class="page-hint">Click an element to select it (handles let you resize/rotate). Double-click text to edit. Drag to reposition.</p>
+  <h1><span class="title-emoji">🏷️</span><span id="titleWord">LabelSmith</span><span class="title-sub">— 62mm label designer</span></h1>
 
   <div class="toolbar">
     <button id="addText">📝 Text</button>
@@ -1069,16 +1074,6 @@ document.getElementById('imageInput').onchange = (e) => {
   e.target.value = '';
 };
 
-// Even column widths across the toolbar, sized to whichever button is
-// widest, rather than each button hugging its own label.
-function equalizeToolbarButtonWidths() {
-  const buttons = document.querySelectorAll('.toolbar > button');
-  buttons.forEach(b => { b.style.width = ''; });
-  const max = Math.max(...[...buttons].map(b => b.offsetWidth));
-  buttons.forEach(b => { b.style.width = max + 'px'; });
-}
-equalizeToolbarButtonWidths();
-
 const iconStarter = document.getElementById('iconStarter');
 iconStarter.innerHTML = STARTER_ICONS.map(g => `<button type="button">${g}</button>`).join('');
 [...iconStarter.children].forEach((btn, i) => btn.onclick = () => insertIcon(STARTER_ICONS[i]));
@@ -1269,6 +1264,46 @@ document.getElementById('printBtn').onclick = async () => {
   status.className = data.success ? 'ok' : 'error';
 };
 
+// ---------- decorative title ----------
+// Purely cosmetic, nothing to do with the printable label: each letter of
+// the title gets a random font pulled from the same Display/Handwriting
+// categories used for browsing in the Font picker, previewed the same
+// ephemeral way as a search result (not installed/saved).
+async function randomizeTitleFonts() {
+  const word = document.getElementById('titleWord');
+  const letters = [...word.textContent].map((ch) => {
+    const span = document.createElement('span');
+    span.className = 'title-letter';
+    span.textContent = ch;
+    return span;
+  });
+  word.innerHTML = '';
+  letters.forEach(s => word.appendChild(s));
+
+  let pool;
+  try {
+    const [display, handwriting] = await Promise.all([
+      fetch('/api/fonts/search?category=display').then(r => r.json()),
+      fetch('/api/fonts/search?category=handwriting').then(r => r.json()),
+    ]);
+    // Google's "Playwrite" family is handwriting-practice fonts, not
+    // decorative ones — the "Guides" variants literally bake dotted
+    // stroke-order guide marks into the glyphs, which reads as broken
+    // rendering rather than fancy.
+    pool = [...display, ...handwriting].filter(f => !/playwrite/i.test(f.family));
+  } catch (e) {
+    return; // decorative only — leave the default font if this fails
+  }
+  if (!pool.length) return;
+
+  letters.forEach((span) => {
+    const font = pool[Math.floor(Math.random() * pool.length)];
+    loadFontPreview(font.family)
+      .then(() => { span.style.fontFamily = `"${font.family}"`; })
+      .catch(() => { /* best-effort — letter just stays in the default font */ });
+  });
+}
+
 // ---------- boot ----------
 
 const fonts = [
@@ -1293,6 +1328,7 @@ Promise.all(fonts.map(f => f.load())).then(async (loaded) => {
 
   addText(); // seed with one text element so the label isn't blank on load
   scaleToViewport();
+  randomizeTitleFonts();
 });
 </script>
 {% endraw %}
