@@ -13,7 +13,7 @@
     body { font-family: system-ui, sans-serif; max-width: 1100px; margin: 32px auto; padding: 0 16px; color: #333; }
     h1 { font-size: clamp(2.4rem, 7vw, 4.5rem); color: #444; text-align: center; margin: 0 0 20px; line-height: 1.15; }
     .title-emoji { font-size: 1.35em; vertical-align: -0.08em; }
-    .title-letter { display: inline-block; }
+    .title-letter { display: inline-block; margin-right: 0.12em; }
     .title-sub { display: block; font-weight: normal; color: #888; font-size: 0.25em; margin-top: 8px; }
     .layout { display: flex; flex-direction: column; gap: 16px; position: relative; }
     /* Grid (not flex) so button width stays consistent across wrapped
@@ -61,12 +61,23 @@
     .font-dropdown-item:hover, .font-dropdown-item:focus { background: #f0f6ff; }
     .font-dropdown-item.selected { background: #e6f0ff; }
 
-    /* Anchored to the bottom-right corner of .layout (i.e. the canvas box,
-       its only in-flow content) rather than sitting in normal flow below
-       it — the canvas is narrower and centered, so this uses the margin
-       space beside it instead of adding a gap underneath. */
+    /* Anchored to the bottom corners of .layout (i.e. the canvas box, its
+       only in-flow content) rather than sitting in normal flow below it —
+       the canvas is narrower and centered, so this uses the margin space
+       beside it instead of adding a gap underneath. Print bottom-right,
+       Templates mirrored bottom-left. */
     .actions { position: absolute; right: 0; bottom: 0; margin: 0; }
+    .actions-left { right: auto; left: 0; }
     .actions button { padding: 10px 20px; font-size: 1rem; cursor: pointer; }
+    /* Print gets extra weight — same footprint as a toolbar button (it's
+       the one action that actually matters), a bold border year-round, and
+       a pulsing purple glow on hover to invite the tap. */
+    #printBtn { padding: 14px 16px; font-size: 1.05rem; border: 3px solid #333; border-radius: 4px; }
+    #printBtn:hover { border-color: #7c3aed; animation: print-pulse 1.1s ease-in-out infinite; }
+    @keyframes print-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.55); }
+      50% { box-shadow: 0 0 0 9px rgba(124, 58, 237, 0); }
+    }
     #status { margin-top: 12px; font-size: 0.9rem; min-height: 1.2em; text-align: right; }
     .error { color: #b00; }
     .ok { color: #060; }
@@ -114,7 +125,6 @@
     <button id="addDate">📅 Date</button>
     <button id="addIconBtn">⭐ Icon</button>
     <button id="addFontBtn">🔤 Font</button>
-    <button id="templatesBtn">📁 Templates</button>
   </div>
   <!-- Single shared panel slot: exactly one of these is visible at a time,
        whichever is currently relevant — a selected element's properties, or
@@ -144,6 +154,9 @@
 
   <div class="layout">
     <div id="stage-wrap"><div id="stage-container"></div></div>
+    <div class="actions actions-left">
+      <button id="templatesBtn">📁 Templates</button>
+    </div>
     <div class="actions">
       <button id="printBtn">🖨️ Print</button>
     </div>
