@@ -403,6 +403,15 @@ function pinTextWidth(node) {
   node.width(node.width());
 }
 
+// Konva sizes a text box tall enough to hold a descender (g/j/p/q/y) on
+// every line, so it doesn't clip descending text — but that headroom goes
+// unused (and wastes vertical space on the printed label) whenever the
+// current text happens to have no descenders, e.g. plain words or a
+// formatted date. Only tighten the box when it's actually safe to.
+function applyTightLineHeight(node) {
+  node.lineHeight(/[gjpqy]/.test(node.text()) ? 1 : 0.85);
+}
+
 function addText() {
   const node = new Konva.Text({
     x: MARGIN_LEFT, y: MARGIN_TOP,
@@ -414,6 +423,7 @@ function addText() {
     align: 'center',
   });
   pinTextWidth(node);
+  applyTightLineHeight(node);
   node.on('dblclick dbltap', () => editText(node));
   registerElement(node, 'text');
 }
@@ -468,6 +478,7 @@ function editText(node) {
   reposition();
   area.addEventListener('input', autoHeight);
   area.focus();
+  area.select(); // let the user start typing straight away instead of having to select the placeholder/existing text first
 
   const vv = window.visualViewport;
   vv && vv.addEventListener('resize', reposition);
@@ -477,6 +488,7 @@ function editText(node) {
 
   function finish() {
     node.text(area.value);
+    applyTightLineHeight(node);
     vv && vv.removeEventListener('resize', reposition);
     vv && vv.removeEventListener('scroll', reposition);
     window.removeEventListener('scroll', reposition);
@@ -588,6 +600,11 @@ function addDateField() {
     align: 'center',
   });
   pinTextWidth(node);
+  applyTightLineHeight(node);
+  // Right-align to the far edge of the label instead of dropping it at the
+  // same top-left spot as everything else, where it lands on top of
+  // whatever text is already there.
+  node.x(LABEL_WIDTH - MARGIN_RIGHT - node.width());
   node.on('dblclick dbltap', () => editText(node)); // still plain-text editable if wanted
   node.setAttr('isDateField', true);
   node.setAttr('dateValue', today);
@@ -597,6 +614,7 @@ function addDateField() {
 
 function updateDateField(node) {
   node.text(formatDate(node.getAttr('dateValue'), node.getAttr('dateFormat')));
+  applyTightLineHeight(node);
   recalcStageSize();
 }
 
@@ -1159,6 +1177,7 @@ function deserializeElement(desc) {
       node.setAttr('dateValue', toLocalISODate(new Date()));
       node.text(formatDate(node.getAttr('dateValue'), desc.dateFormat));
     }
+    applyTightLineHeight(node);
     registerElement(node, 'text');
     return;
   }
