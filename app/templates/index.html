@@ -354,10 +354,31 @@ function clearGuides() {
   guideLayer.batchDraw();
 }
 
+// Keep a dragged element's bounding box from crossing the label's left/right/
+// top edges — those are hard physical bounds (tape width, start of feed).
+// The bottom is deliberately left unclamped: dragging something further down
+// is how you make the label longer, and recalcStageSize() grows to fit it.
+function clampToPanel(node) {
+  const box = node.getClientRect({ relativeTo: stage });
+  const clampedX = Math.max(Math.min(box.x, LABEL_WIDTH - box.width), 0);
+  const clampedY = Math.max(box.y, 0);
+  const dx = clampedX - box.x, dy = clampedY - box.y;
+  if (dx || dy) {
+    node.x(node.x() + dx);
+    node.y(node.y() + dy);
+  }
+}
+
+// The minimum width a text box can shrink to without wrapping its current
+// text onto a second line, at the given font settings.
+function naturalTextWidth(text, fontSize, fontFamily, fontStyle) {
+  return new Konva.Text({ text, fontSize, fontFamily, fontStyle }).width();
+}
+
 function registerElement(node, type, keepDropdownOpen) {
   node.setAttr('elementType', type);
   node.draggable(true);
-  node.on('dragmove', () => snapOnDragMove(node));
+  node.on('dragmove', () => { snapOnDragMove(node); clampToPanel(node); });
   node.on('dragend', () => { clearGuides(); recalcStageSize(); });
   node.on('transformend', () => {
     // Konva's Transformer resizes via scaleX/scaleY by default. Left as-is,
@@ -374,7 +395,11 @@ function registerElement(node, type, keepDropdownOpen) {
       // Scale the width by sy too (not just sx) — otherwise growing the font
       // via a vertical handle leaves the box the same width as before, and
       // the now-bigger text no longer fits on one line and wraps.
-      const newWidth = Math.max(newSize * 0.6, node.width() * sx * sy);
+      // Also floor it at the text's own natural single-line width, so
+      // shrinking horizontally can narrow the box down to that but not
+      // past it — narrower than that would wrap the text instead.
+      const minWidth = naturalTextWidth(node.text(), newSize, node.fontFamily(), node.fontStyle());
+      const newWidth = Math.max(newSize * 0.6, minWidth, node.width() * sx * sy);
       node.fontSize(newSize);
       node.width(newWidth);
       node.scaleX(1);
@@ -391,6 +416,7 @@ function registerElement(node, type, keepDropdownOpen) {
       node.scaleX(1);
       node.scaleY(1);
     }
+    clampToPanel(node);
     clearGuides();
     recalcStageSize();
   });
