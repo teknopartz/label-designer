@@ -171,7 +171,16 @@
 {% raw %}
 <script>
 const LABEL_WIDTH = 696;
-const MARGIN_TOP = 24, MARGIN_BOTTOM = 24, MARGIN_LEFT = 35, MARGIN_RIGHT = 35;
+// 696px IS the printer's full printable width for 62mm tape (brother_ql's
+// "62" label spec: dots_printable=696) — the driver never touches pixels
+// outside our image in that direction, so there's no hardware reason for a
+// side margin. And in the feed direction (top/bottom), brother_ql already
+// auto-inserts a 35-dot blank feed before every label for the cutter
+// (label_specs['feed_margin'], added at print time, outside our image) —
+// so MARGIN_TOP/BOTTOM aren't providing cutting clearance either. What's
+// left here is just enough to keep ink off the tape's physical edge and
+// text from looking flush-cut.
+const MARGIN_TOP = 4, MARGIN_BOTTOM = 4, MARGIN_LEFT = 6, MARGIN_RIGHT = 6;
 const MIN_HEIGHT = 120;
 
 const stage = new Konva.Stage({ container: 'stage-container', width: LABEL_WIDTH, height: MIN_HEIGHT });
@@ -362,7 +371,10 @@ function registerElement(node, type, keepDropdownOpen) {
       // independently, so the box can be wider than its text — the text
       // stays centered within it (align:'center'), it doesn't get stretched.
       const newSize = Math.max(6, Math.round(node.fontSize() * sy));
-      const newWidth = Math.max(newSize * 0.6, node.width() * sx);
+      // Scale the width by sy too (not just sx) — otherwise growing the font
+      // via a vertical handle leaves the box the same width as before, and
+      // the now-bigger text no longer fits on one line and wraps.
+      const newWidth = Math.max(newSize * 0.6, node.width() * sx * sy);
       node.fontSize(newSize);
       node.width(newWidth);
       node.scaleX(1);
@@ -426,6 +438,7 @@ function addText() {
   applyTightLineHeight(node);
   node.on('dblclick dbltap', () => editText(node));
   registerElement(node, 'text');
+  return node;
 }
 
 function editText(node) {
@@ -1362,7 +1375,9 @@ Promise.all(fonts.map(f => f.load())).then(async (loaded) => {
     console.warn('Could not load installed font manifest', e);
   }
 
-  addText(); // seed with one text element so the label isn't blank on load
+  // Seed with one text element, ready to type over immediately, so the
+  // label isn't blank on load and there's no click-to-select step first.
+  editText(addText());
   scaleToViewport();
   randomizeTitleFonts();
 });
