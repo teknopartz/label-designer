@@ -181,7 +181,10 @@ const LABEL_WIDTH = 696;
 // left here is just enough to keep ink off the tape's physical edge and
 // text from looking flush-cut.
 const MARGIN_TOP = 4, MARGIN_BOTTOM = 4, MARGIN_LEFT = 6, MARGIN_RIGHT = 6;
-const MIN_HEIGHT = 120;
+// Only a floor for the empty canvas (no elements yet) so it doesn't collapse
+// to a sliver — real content almost always exceeds this on its own, so it
+// should never be padding out a label that's shorter than it.
+const MIN_HEIGHT = 40;
 
 const stage = new Konva.Stage({ container: 'stage-container', width: LABEL_WIDTH, height: MIN_HEIGHT });
 const layer = new Konva.Layer();
