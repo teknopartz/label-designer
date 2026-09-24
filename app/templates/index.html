@@ -372,17 +372,25 @@ function clampToPanel(node) {
   }
 }
 
-// The minimum width a text box can shrink to without wrapping its current
-// text onto a second line, at the given font settings.
-function naturalTextWidth(text, fontSize, fontFamily, fontStyle) {
-  return new Konva.Text({ text, fontSize, fontFamily, fontStyle }).width();
-}
-
 function registerElement(node, type, keepDropdownOpen) {
   node.setAttr('elementType', type);
   node.draggable(true);
   node.on('dragmove', () => { snapOnDragMove(node); clampToPanel(node); });
   node.on('dragend', () => { clearGuides(); recalcStageSize(); });
+  if (type === 'text') {
+    // Text boxes always hug their text (see refitText), so every handle
+    // means "make the text bigger/smaller": left/right handles scale it by
+    // the horizontal drag, top/bottom and corners by the vertical one.
+    // Converted to a real font size on every move, not just at the end, so
+    // the text never shows stretched/squashed mid-drag.
+    node.on('transform', () => {
+      const anchor = transformer.getActiveAnchor() || '';
+      const s = Math.abs(anchor.startsWith('middle') ? node.scaleX() : node.scaleY());
+      node.fontSize(Math.max(6, node.fontSize() * s));
+      node.scaleX(1);
+      node.scaleY(1);
+    });
+  }
   node.on('transformend', () => {
     // Konva's Transformer resizes via scaleX/scaleY by default. Left as-is,
     // that stretches stroke width (borders/lines look thicker on one side
@@ -390,23 +398,7 @@ function registerElement(node, type, keepDropdownOpen) {
     // node's real properties instead, every time, for every element type.
     const sx = node.scaleX(), sy = node.scaleY();
     if (type === 'text') {
-      // Vertical resize (top/bottom handles, or a corner) changes font size.
-      // Horizontal resize (left/right-middle handles) changes the box width
-      // independently, so the box can be wider than its text — the text
-      // stays centered within it (align:'center'), it doesn't get stretched.
-      const newSize = Math.max(6, Math.round(node.fontSize() * sy));
-      // Scale the width by sy too (not just sx) — otherwise growing the font
-      // via a vertical handle leaves the box the same width as before, and
-      // the now-bigger text no longer fits on one line and wraps.
-      // Also floor it at the text's own natural single-line width, so
-      // shrinking horizontally can narrow the box down to that but not
-      // past it — narrower than that would wrap the text instead.
-      const minWidth = naturalTextWidth(node.text(), newSize, node.fontFamily(), node.fontStyle());
-      const newWidth = Math.max(newSize * 0.6, minWidth, node.width() * sx * sy);
-      node.fontSize(newSize);
-      node.width(newWidth);
-      node.scaleX(1);
-      node.scaleY(1);
+      // Already baked into fontSize by the 'transform' handler above.
       if (selected === node) renderPanel();
     } else if (type === 'line') {
       const pts = node.points();
@@ -433,15 +425,53 @@ function registerElement(node, type, keepDropdownOpen) {
 
 // ---------- text elements ----------
 
-// Text elements get an explicit, independently-resizable box width (not
-// Konva's default auto-width-to-content) so the box can be wider than its
-// text, with the text centered inside — like a real text box, not a label
-// that hugs its own content. Called once right after creation: at that
-// point Konva has already auto-measured a natural width, which we then pin
-// as an explicit value going forward (resize changes it from here on, text
-// content changes no longer do).
-function pinTextWidth(node) {
-  node.width(node.width());
+// Text elements keep Konva's default auto width, so the box is always
+// exactly as wide as its widest line — no dead space either side, and the
+// box edges ARE the text edges for snapping to margins/other elements.
+// Multiple lines only come from explicit newlines, centered on each other.
+//
+// The catch is that any change to the text or its font changes the box
+// width, which by default grows/shrinks from the left edge. refitText()
+// wraps such a change and keeps whichever edge the user lined up: a left
+// or right edge sitting on a snap stop (margin, another element's edge)
+// stays put; anything else stays centered where it was.
+const EDGE_TOLERANCE = 2; // px — snapping makes lined-up edges exact, this just absorbs float noise
+
+function refitText(node, change) {
+  const oldWidth = node.width();
+  const box = node.getClientRect({ relativeTo: stage });
+  change();
+  const dw = node.width() - oldWidth;
+  if (dw) {
+    let shift = -dw / 2;
+    if (node.rotation() === 0) {
+      const stops = getGuideStops(node).vertical;
+      const onStop = (edge) => stops.some(s => Math.abs(edge - s) <= EDGE_TOLERANCE);
+      if (onStop(box.x)) shift = 0;
+      else if (onStop(box.x + box.width)) shift = -dw;
+    }
+    shiftAlongText(node, shift);
+  }
+  clampToPanel(node);
+  recalcStageSize();
+}
+
+// Move a text node along its own (possibly rotated) baseline direction.
+function shiftAlongText(node, dx) {
+  const r = node.rotation() * Math.PI / 180;
+  node.x(node.x() + dx * Math.cos(r));
+  node.y(node.y() + dx * Math.sin(r));
+}
+
+// Largest font size that fits the text across the printable width, centered.
+function fitTextToWidth(node) {
+  const available = LABEL_WIDTH - MARGIN_LEFT - MARGIN_RIGHT;
+  // Text width is close to, but not exactly, linear in font size (hinting,
+  // kerning), so a second pass corrects the small overshoot/undershoot.
+  for (let i = 0; i < 2; i++) node.fontSize(node.fontSize() * available / node.width());
+  if (node.rotation() === 0) node.x(MARGIN_LEFT + (available - node.width()) / 2);
+  clampToPanel(node);
+  recalcStageSize();
 }
 
 // Konva sizes a text box tall enough to hold a descender (g/j/p/q/y) on
@@ -463,7 +493,6 @@ function addText() {
     fill: 'black',
     align: 'center',
   });
-  pinTextWidth(node);
   applyTightLineHeight(node);
   node.on('dblclick dbltap', () => editText(node));
   registerElement(node, 'text');
@@ -477,6 +506,9 @@ function editText(node) {
 
   const area = document.createElement('textarea');
   area.rows = 1;
+  // No soft wrapping — like the text box itself, only explicit newlines make
+  // new lines; the textarea widens to fit instead (see autoSize).
+  area.wrap = 'off';
   document.body.appendChild(area);
   area.value = node.text();
   Object.assign(area.style, {
@@ -494,31 +526,32 @@ function editText(node) {
   // not node.height(): Konva wraps text using canvas font-metrics, the
   // textarea wraps using the browser's own — they can disagree on line
   // count, and trusting Konva's number left the box taller than the text
-  // actually visible inside it.
-  function autoHeight() {
+  // actually visible inside it. Width likewise grows with what's typed.
+  let minWidth = 120;
+  function autoSize() {
+    area.style.width = '0';
+    // +8px buffer: Konva measures text width via canvas, the textarea via
+    // its own DOM layout — they can disagree by a couple pixels.
+    area.style.width = (Math.max(minWidth, area.scrollWidth) + 8) + 'px';
     area.style.height = 'auto';
     area.style.height = area.scrollHeight + 'px';
   }
   function reposition() {
     const rect = stage.container().getBoundingClientRect();
     const scale = stage.scaleX() || (parseFloat(document.getElementById('stage-container').style.transform.replace(/[^0-9.]/g, '')) || 1);
+    minWidth = Math.max(120, node.width() * scale);
     Object.assign(area.style, {
       top: (rect.top + window.scrollY + node.y() * scale) + 'px',
       left: (rect.left + window.scrollX + node.x() * scale) + 'px',
-      // +8px buffer: Konva measures text width via canvas, the textarea via
-      // its own DOM layout — they can disagree by a couple pixels, and
-      // without slack that was enough to wrap the last word onto a phantom
-      // second line.
-      width: (Math.max(120, node.width() * scale) + 8) + 'px',
       fontSize: (node.fontSize() * scale) + 'px',
       fontFamily: node.fontFamily(),
       fontWeight: node.fontStyle().includes('bold') ? 'bold' : 'normal',
       fontStyle: node.fontStyle().includes('italic') ? 'italic' : 'normal',
     });
-    autoHeight();
+    autoSize();
   }
   reposition();
-  area.addEventListener('input', autoHeight);
+  area.addEventListener('input', autoSize);
   area.focus();
   area.select(); // let the user start typing straight away instead of having to select the placeholder/existing text first
 
@@ -529,16 +562,17 @@ function editText(node) {
   window.addEventListener('resize', reposition);
 
   function finish() {
-    node.text(area.value);
-    applyTightLineHeight(node);
     vv && vv.removeEventListener('resize', reposition);
     vv && vv.removeEventListener('scroll', reposition);
     window.removeEventListener('scroll', reposition);
     window.removeEventListener('resize', reposition);
     document.body.removeChild(area);
     node.show();
+    refitText(node, () => {
+      node.text(area.value);
+      applyTightLineHeight(node);
+    });
     select(node);
-    recalcStageSize();
   }
   area.addEventListener('blur', finish);
   area.addEventListener('keydown', (e) => { if (e.key === 'Escape') finish(); });
@@ -641,7 +675,6 @@ function addDateField() {
     fill: 'black',
     align: 'center',
   });
-  pinTextWidth(node);
   applyTightLineHeight(node);
   // Right-align to the far edge of the label instead of dropping it at the
   // same top-left spot as everything else, where it lands on top of
@@ -655,9 +688,10 @@ function addDateField() {
 }
 
 function updateDateField(node) {
-  node.text(formatDate(node.getAttr('dateValue'), node.getAttr('dateFormat')));
-  applyTightLineHeight(node);
-  recalcStageSize();
+  refitText(node, () => {
+    node.text(formatDate(node.getAttr('dateValue'), node.getAttr('dateFormat')));
+    applyTightLineHeight(node);
+  });
 }
 
 // ---------- icon elements ----------
@@ -676,7 +710,6 @@ function insertIcon(glyph) {
     fill: 'black',
     align: 'center',
   });
-  pinTextWidth(node);
   registerElement(node, 'text', true);
   // Deliberately NOT closing the picker (keepDropdownOpen) — inserting
   // several icons in a row shouldn't mean reopening it each time, and
@@ -1012,12 +1045,13 @@ function renderPanel() {
         <div class="field grow"><label>Font family</label>${fontDropdownHtml(selected.fontFamily())}</div>
         <div class="field grow">
           <label>Font size — <span id="p_fontsize_val">${size}</span>px</label>
-          <input type="range" id="p_fontsize" value="${size}" min="10" max="300">
+          <input type="range" id="p_fontsize" value="${size}" min="10" max="${Math.max(300, size)}">
         </div>
         <div class="checks">
           <label><input type="checkbox" id="p_bold" ${isBold ? 'checked' : ''}> Bold</label>
           <label><input type="checkbox" id="p_italic" ${isItalic ? 'checked' : ''}> Italic</label>
         </div>
+        <button type="button" id="p_fitwidth" title="Make the text as large as fits across the label">↔ Fit to width</button>
       </div>`;
   }
 
@@ -1091,23 +1125,24 @@ function renderPanel() {
 
   if (type === 'text') {
     wireFontDropdown((family) => {
-      selected.fontFamily(family);
-      recalcStageSize();
+      refitText(selected, () => selected.fontFamily(family));
     });
     document.getElementById('p_fontsize').addEventListener('input', (e) => {
       const size = parseInt(e.target.value, 10) || 50;
-      selected.fontSize(size);
+      refitText(selected, () => selected.fontSize(size));
       document.getElementById('p_fontsize_val').textContent = size;
-      recalcStageSize();
     });
     const applyStyle = () => {
       const bold = document.getElementById('p_bold').checked;
       const italic = document.getElementById('p_italic').checked;
-      selected.fontStyle(`${italic ? 'italic ' : ''}${bold ? 'bold' : ''}`.trim() || 'normal');
-      recalcStageSize();
+      refitText(selected, () => selected.fontStyle(`${italic ? 'italic ' : ''}${bold ? 'bold' : ''}`.trim() || 'normal'));
     };
     document.getElementById('p_bold').addEventListener('change', applyStyle);
     document.getElementById('p_italic').addEventListener('change', applyStyle);
+    document.getElementById('p_fitwidth').addEventListener('click', () => {
+      fitTextToWidth(selected);
+      renderPanel();
+    });
   }
 
   if (type === 'border' || type === 'line') {
@@ -1172,7 +1207,6 @@ function serializeElement(node) {
   if (type === 'text') {
     return Object.assign(base, {
       text: node.text(),
-      width: node.width(),
       fontFamily: node.fontFamily(),
       fontSize: node.fontSize(),
       fontStyle: node.fontStyle(),
@@ -1207,9 +1241,17 @@ function deserializeElement(desc) {
       text: desc.text, fontFamily: desc.fontFamily, fontSize: desc.fontSize,
       fontStyle: desc.fontStyle, fill: 'black', align: 'center',
     });
-    // desc.width is undefined for templates saved before this was tracked —
-    // fall back to auto-measuring, same as a freshly-created text element.
-    node.width(desc.width || node.width());
+    // Templates saved while text boxes had a fixed width carry desc.width.
+    // Convert to the auto-width box without moving anything on the label:
+    // bake any word-wrapping that width caused into explicit newlines, and
+    // keep the text centered where it was (it was align:'center' inside).
+    if (desc.width) {
+      node.width(desc.width);
+      const lines = node.textArr.map(l => l.text);
+      node.width('auto');
+      node.text(lines.join('\n'));
+      shiftAlongText(node, (desc.width - node.width()) / 2);
+    }
     node.on('dblclick dbltap', () => editText(node));
     if (desc.isDateField) {
       node.setAttr('isDateField', true);
