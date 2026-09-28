@@ -99,6 +99,7 @@ Font and icon search call out to third-party services. If one of them goes down,
 - [Konva](https://konvajs.org) (MIT): canvas editor
 - [DejaVu fonts](https://dejavu-fonts.github.io) (free license): the bundled default font
 - [Material Symbols](https://fonts.google.com/icons) (Apache 2.0): icons
+- App icon: [Printer icons created by Eucalyp - Flaticon](https://www.flaticon.com/free-icons/printer) ([this icon](https://www.flaticon.com/free-icon/barcode_2170543), [Eucalyp's profile](https://www.flaticon.com/authors/eucalyp))
 
 This project was written with the help of [Claude Code](https://claude.com/claude-code).
 
