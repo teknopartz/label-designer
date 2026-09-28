@@ -4,6 +4,8 @@ A browser-based, drag-and-drop label designer for Brother QL label printers. It 
 
 It started as a replacement for [brother_ql_web](https://github.com/pklaus/brother_ql_web): instead of a form that renders a single line of text, you get a WYSIWYG canvas where what you see is exactly what prints.
 
+![The LabelSmith editor with a text element and a selected date element on a 62 mm label](docs/screenshot.png)
+
 ## Features
 
 - **Text** with bold/italic, resize from any handle, and "Fit to width" to make it as large as the label allows
