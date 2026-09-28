@@ -488,7 +488,7 @@ function addText() {
     x: MARGIN_LEFT, y: MARGIN_TOP,
     text: 'New text',
     fontSize: 50,
-    fontFamily: 'DejaVu Sans',
+    fontFamily: randomInstalledFont(),
     fontStyle: 'normal',
     fill: 'black',
     align: 'center',
@@ -670,7 +670,7 @@ function addDateField() {
     x: MARGIN_LEFT, y: MARGIN_TOP,
     text: formatDate(today, 'dmy_slash'),
     fontSize: 50,
-    fontFamily: 'DejaVu Sans',
+    fontFamily: randomInstalledFont(),
     fontStyle: 'normal',
     fill: 'black',
     align: 'center',
@@ -783,6 +783,19 @@ async function renderIconCategoryChips() {
 // — after that it works the same as DejaVu Sans, no live network dependency.
 
 let installedFonts = { 'DejaVu Sans': true }; // family name -> true once its FontFaces are registered
+
+// New text/date elements start in a random installed font rather than always
+// DejaVu Sans. Only installed families are candidates — they're already
+// loaded, so the new element measures and prints correctly straight away.
+// Skips the previous pick so two adds in a row never look identical.
+let lastRandomFont = null;
+
+function randomInstalledFont() {
+  const families = Object.keys(installedFonts);
+  const choices = families.length > 1 ? families.filter(f => f !== lastRandomFont) : families;
+  lastRandomFont = choices[Math.floor(Math.random() * choices.length)];
+  return lastRandomFont;
+}
 
 function registerGoogleFontFamily(family, files) {
   const weightStyle = {
