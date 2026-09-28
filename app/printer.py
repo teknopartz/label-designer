@@ -1,3 +1,6 @@
+# Adapted from brother_ql_web (https://github.com/pklaus/brother_ql_web),
+# GPL-3.0. Modified for LabelSmith.
+
 import os
 
 from brother_ql.backends import backend_factory, guess_backend

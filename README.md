@@ -108,4 +108,6 @@ This is a personal project shared as-is. Issues and pull requests are welcome, b
 
 ## License
 
+Copyright (C) 2026 Jeremy Ayre
+
 GPL-3.0. See [LICENSE](LICENSE). This project adapts code from brother_ql_web and depends on brother_ql, both of which are GPL-3.0.
