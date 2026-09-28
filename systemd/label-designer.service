@@ -4,9 +4,9 @@ After=network.target
 
 [Service]
 Type=simple
-User=johnny
-WorkingDirectory=/home/johnny/label-designer
-ExecStart=/home/johnny/label-designer/venv/bin/python run.py --model QL-700 --label-size 62 --port 8014 file:///dev/usb/lp0
+User=pi
+WorkingDirectory=/home/pi/label-designer
+ExecStart=/home/pi/label-designer/venv/bin/python run.py --model QL-700 --label-size 62 --port 8014 file:///dev/usb/lp0
 Restart=on-failure
 RestartSec=5
 

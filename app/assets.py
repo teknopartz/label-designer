@@ -116,6 +116,10 @@ def installed_fonts():
 
 
 def install_font(font_id):
+    # font_id becomes a directory name under FONTS_DIR, so reject anything
+    # that isn't a plain google-webfonts-helper slug (e.g. "open-sans").
+    if not re.match(r'^[a-z0-9-]{1,80}$', font_id or ''):
+        raise ValueError('invalid font id')
     manifest = _load_manifest()
     if font_id in manifest:
         return manifest[font_id]

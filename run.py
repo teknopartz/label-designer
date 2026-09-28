@@ -5,7 +5,7 @@ from app import create_app
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Label Designer — Phase 0 skeleton")
+    parser = argparse.ArgumentParser(description="LabelSmith — label designer for Brother QL printers")
     parser.add_argument('--model', default='QL-700', help='Printer model (default: QL-700)')
     parser.add_argument('--label-size', default='62', help='Label size, e.g. 62 (default: 62)')
     parser.add_argument('--port', type=int, default=8014, help='HTTP port (default: 8014)')
