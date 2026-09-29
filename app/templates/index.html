@@ -24,8 +24,15 @@
        rows — columns are sized once for the whole toolbar and reused on
        every row, so a short last row leaves blank space on the right
        instead of stretching its lone button to fill the row by itself. */
-    .toolbar { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 12px; }
-    .toolbar button { padding: 14px 16px; font-size: 1.05rem; cursor: pointer; }
+    .toolbar { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 0; position: relative; z-index: 1; }
+    /* The toolbar buttons double as tabs for the shared panel slot below:
+       the one matching what the panel is showing is drawn "attached" to it
+       (same background, no bottom border, overlapping the panel's top
+       border by 1px), the rest look like inactive tabs sitting behind it.
+       That makes a heading inside the panel unnecessary. */
+    .toolbar button { padding: 14px 16px; font-size: 1.05rem; cursor: pointer; background: #e9e9ec; color: #555; border: 1px solid #ccc; border-bottom: none; border-radius: 8px 8px 0 0; }
+    .toolbar button:hover { background: #f2f2f5; }
+    .toolbar button.tab-active { background: #fafcff; color: #222; font-weight: 600; margin-bottom: -1px; padding-bottom: 15px; }
     /* Sized to hug its actual content (the canvas) — must NOT flex-grow past
        that, or the background visually extends past the true label edge
        while dragged elements still clip exactly at the real boundary. */
@@ -39,7 +46,6 @@
        a narrow desktop sidebar. */
     #panel { width: 100%; box-sizing: border-box; font-size: 0.95rem; transition: opacity 0.15s; }
     #panel.disabled { opacity: 0.45; pointer-events: none; }
-    #panel h2 { font-size: 0.95rem; margin: 0 0 12px; color: #555; }
     #panel .field { display: flex; flex-direction: column; gap: 4px; }
     #panel .field label { font-size: 0.8rem; color: #666; }
     #panel .fields-row { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-end; }
@@ -57,7 +63,9 @@
     /* Custom font-family picker — native <select> can't reliably render each
        option in its own font (especially on Android), so this is a styled
        dropdown built from scratch. */
-    .font-dropdown { position: relative; }
+    .font-dropdown { position: relative; flex: 1; min-width: 0; }
+    .font-row { display: flex; gap: 8px; align-items: stretch; }
+    #panel .font-row .font-random { padding: 6px 12px; font-size: 1.2rem; line-height: 1; }
     .font-dropdown-btn { width: 100%; box-sizing: border-box; text-align: left; padding: 10px; font-size: 1rem; background: white; border: 1px solid #bbb; border-radius: 4px; cursor: pointer; }
     .font-dropdown-list { position: absolute; z-index: 20; top: 100%; left: 0; right: 0; max-height: 260px; overflow-y: auto; background: white; border: 1px solid #bbb; border-radius: 4px; box-shadow: 0 4px 10px rgba(0,0,0,0.15); display: none; }
     .font-dropdown-list.open { display: block; }
@@ -90,9 +98,12 @@
     /* Shared style for the Font/Icon/Templates toolbar dropdowns, so they
        look and behave consistently instead of each being a slightly
        different one-off box. */
-    .dropdown-panel { margin-bottom: 12px; padding: 14px; border: 1px solid #ccc; border-radius: 6px; background: #fafcff; box-shadow: 0 2px 8px rgba(0,0,0,0.07); }
+    .dropdown-panel { position: relative; margin-bottom: 12px; padding: 14px; border: 1px solid #ccc; border-radius: 6px; background: #fafcff; box-shadow: 0 2px 8px rgba(0,0,0,0.07); }
     .dropdown-panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
     .dropdown-panel-header h3 { margin: 0; font-size: 1rem; color: #444; }
+    /* Font/Icon pickers are labelled by their active tab, so their close
+       button just floats in the top-right corner instead of a header row. */
+    .dropdown-panel > .dropdown-close { position: absolute; top: 10px; right: 10px; }
     .dropdown-close { width: auto; margin-top: 0; padding: 4px 12px; font-size: 1rem; line-height: 1.2; cursor: pointer; background: #eee; border: 1px solid #ccc; border-radius: 4px; }
     #iconPicker button { font-size: 1.6rem; padding: 6px 10px; margin: 2px; cursor: pointer; font-family: 'DejaVu Sans', sans-serif; }
 
@@ -143,15 +154,15 @@
     <div id="templateList" style="margin-top:10px;"></div>
   </div>
   <div id="iconPicker" class="dropdown-panel" style="display:none;">
-    <div class="dropdown-panel-header"><h3>Icons</h3><button type="button" class="dropdown-close" data-target="iconPicker">✕</button></div>
-    <div id="iconStarter"></div>
+    <button type="button" class="dropdown-close" data-target="iconPicker">✕</button>
+    <div id="iconStarter" style="margin-right:48px;"></div>
     <div id="iconCategories" style="margin-top:10px;"></div>
     <input type="text" id="iconSearch" placeholder="Or search by name (Material Symbols)..." style="width:100%; margin-top:8px; box-sizing:border-box;">
     <div id="iconResults" style="margin-top:6px;"></div>
   </div>
   <div id="fontPicker" class="dropdown-panel" style="display:none;">
-    <div class="dropdown-panel-header"><h3>Fonts</h3><button type="button" class="dropdown-close" data-target="fontPicker">✕</button></div>
-    <div id="fontCategories"></div>
+    <button type="button" class="dropdown-close" data-target="fontPicker">✕</button>
+    <div id="fontCategories" style="margin-right:48px;"></div>
     <input type="text" id="fontSearch" placeholder="Or search Google Fonts by name..." style="width:100%; box-sizing:border-box;">
     <div id="fontResults" style="margin-top:6px; font-size:0.85rem;"></div>
   </div>
@@ -229,6 +240,10 @@ stage.add(guideLayer);
 
 let elements = [];   // all Konva nodes the user placed
 let selected = null; // currently selected node
+// Which toolbar tab the property panel belongs to, set by renderPanel().
+// Kept after deselecting, since the dimmed panel still shows those controls.
+let panelTab = null;
+const DROPDOWN_TABS = { fontPicker: 'addFontBtn', iconPicker: 'addIconBtn' };
 
 // ---------- selection ----------
 
@@ -790,9 +805,9 @@ let installedFonts = { 'DejaVu Sans': true }; // family name -> true once its Fo
 // Skips the previous pick so two adds in a row never look identical.
 let lastRandomFont = null;
 
-function randomInstalledFont() {
+function randomInstalledFont(exclude = lastRandomFont) {
   const families = Object.keys(installedFonts);
-  const choices = families.length > 1 ? families.filter(f => f !== lastRandomFont) : families;
+  const choices = families.length > 1 ? families.filter(f => f !== exclude) : families;
   lastRandomFont = choices[Math.floor(Math.random() * choices.length)];
   return lastRandomFont;
 }
@@ -923,6 +938,14 @@ const TOP_PANEL_IDS = ['panel', 'fontPicker', 'iconPicker', 'templatesPanel'];
 
 function showTopPanel(id) {
   TOP_PANEL_IDS.forEach(pid => { document.getElementById(pid).style.display = pid === id ? 'block' : 'none'; });
+  updateActiveTab();
+}
+
+
+function updateActiveTab() {
+  const shown = TOP_PANEL_IDS.find(pid => document.getElementById(pid).style.display !== 'none');
+  const activeId = shown === 'panel' ? panelTab : DROPDOWN_TABS[shown];
+  document.querySelectorAll('.toolbar button').forEach(b => b.classList.toggle('tab-active', b.id === activeId));
 }
 
 function toggleDropdown(id, onOpen) {
@@ -1004,9 +1027,12 @@ function fontDropdownHtml(currentFamily) {
   const families = Object.keys(installedFonts).sort();
   const items = families.map(f => `<div class="font-dropdown-item${f === currentFamily ? ' selected' : ''}" data-family="${f}" style="font-family:'${f}';" tabindex="0">${f}</div>`).join('');
   return `
-    <div class="font-dropdown" id="p_fontfamily_wrap">
-      <button type="button" class="font-dropdown-btn" id="p_fontfamily_btn" style="font-family:'${currentFamily}';">${currentFamily}</button>
-      <div class="font-dropdown-list" id="p_fontfamily_list">${items}</div>
+    <div class="font-row">
+      <div class="font-dropdown" id="p_fontfamily_wrap">
+        <button type="button" class="font-dropdown-btn" id="p_fontfamily_btn" style="font-family:'${currentFamily}';">${currentFamily}</button>
+        <div class="font-dropdown-list" id="p_fontfamily_list">${items}</div>
+      </div>
+      <button type="button" class="font-random" id="p_fontrandom" title="Random font" aria-label="Random font">🎲</button>
     </div>`;
 }
 
@@ -1024,15 +1050,26 @@ function wireFontDropdown(onSelect) {
     });
   });
   document.addEventListener('click', () => list.classList.remove('open'), { once: true });
+  document.getElementById('p_fontrandom').addEventListener('click', (e) => {
+    e.stopPropagation();
+    list.classList.remove('open');
+    const family = randomInstalledFont(btn.textContent);
+    btn.textContent = family;
+    btn.style.fontFamily = `'${family}'`;
+    list.querySelectorAll('.font-dropdown-item').forEach(i => i.classList.toggle('selected', i.dataset.family === family));
+    onSelect(family);
+  });
 }
 
 function renderPanel() {
   const panel = document.getElementById('panel');
-  if (!selected) { panel.innerHTML = '<div class="empty">Nothing selected</div>'; return; }
+  if (!selected) { panel.innerHTML = '<div class="empty">Nothing selected</div>'; panelTab = null; updateActiveTab(); return; }
 
   const type = selected.getAttr('elementType');
   const isDateField = type === 'text' && selected.getAttr('isDateField');
-  let html = `<h2>${isDateField ? 'Date' : type[0].toUpperCase() + type.slice(1)}</h2>`;
+  panelTab = isDateField ? 'addDate' : { text: 'addText', image: 'addImageBtn', border: 'addBorder', line: 'addLine' }[type];
+  updateActiveTab();
+  let html = '';
 
   if (isDateField) {
     const fmtOptions = Object.keys(DATE_FORMAT_LABELS)
