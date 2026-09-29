@@ -86,6 +86,10 @@
        a pulsing purple glow on hover to invite the tap. */
     #printBtn { padding: 14px 16px; font-size: 1.05rem; border: 3px solid #333; border-radius: 4px; }
     #printBtn:hover { border-color: #7c3aed; animation: print-pulse 1.1s ease-in-out infinite; }
+    /* Printer switched off/unplugged (see checkPrinter): greyed out and no
+       inviting pulse, but still clickable — pressing it gives the error. */
+    #printBtn.offline { border-color: #bbb; color: #999; }
+    #printBtn.offline:hover { border-color: #bbb; animation: none; }
     @keyframes print-pulse {
       0%, 100% { box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.55); }
       50% { box-shadow: 0 0 0 9px rgba(124, 58, 237, 0); }
@@ -111,7 +115,11 @@
        to typing a name you might not know. */
     .chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
     #iconPicker .chip, .chip { width: auto; margin: 0; padding: 6px 12px; font-size: 0.85rem; font-family: system-ui, sans-serif; border: 1px solid #bbb; border-radius: 999px; background: white; cursor: pointer; }
-    .chip.active { background: #2563eb; color: white; border-color: #2563eb; }
+    .chip.active, #iconPicker .chip.active { background: #2563eb; color: white; border-color: #2563eb; }
+    /* Icon-set switcher (Clip art / Emoji / …): same pill look as the
+       category chips but larger, since it's the top-level choice. */
+    #iconPicker .chip.icon-set { padding: 8px 16px; font-size: 0.95rem; font-weight: 600; }
+    #iconResults img { display: block; }
 
     /* Font results as a tag cloud: each font is its own pill with a
        checkbox that installs it in place, rather than a vertical list of
@@ -156,9 +164,11 @@
   <div id="iconPicker" class="dropdown-panel" style="display:none;">
     <button type="button" class="dropdown-close" data-target="iconPicker">✕</button>
     <div id="iconStarter" style="margin-right:48px;"></div>
-    <div id="iconCategories" style="margin-top:10px;"></div>
-    <input type="text" id="iconSearch" placeholder="Or search by name (Material Symbols)..." style="width:100%; margin-top:8px; box-sizing:border-box;">
+    <div id="iconSets" class="chip-row" style="margin-top:10px;"></div>
+    <div id="iconCategories"></div>
+    <input type="text" id="iconSearch" placeholder="Or search by name..." style="width:100%; box-sizing:border-box;">
     <div id="iconResults" style="margin-top:6px;"></div>
+    <div id="iconCredit" class="hint" style="margin-top:8px;"></div>
   </div>
   <div id="fontPicker" class="dropdown-panel" style="display:none;">
     <button type="button" class="dropdown-close" data-target="fontPicker">✕</button>
@@ -171,6 +181,8 @@
     <div id="stage-wrap"><div id="stage-container"></div></div>
     <div class="actions actions-left">
       <button id="templatesBtn">📁 Templates</button>
+      <button id="undoBtn" title="Undo (Ctrl+Z)" aria-label="Undo" disabled>↶</button>
+      <button id="redoBtn" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" disabled>↷</button>
     </div>
     <div class="actions">
       <button id="printBtn">🖨️ Print</button>
@@ -240,6 +252,14 @@ stage.add(guideLayer);
 
 let elements = [];   // all Konva nodes the user placed
 let selected = null; // currently selected node
+
+// Undo/redo state — see the "undo / redo" section.
+const HISTORY_LIMIT = 100;
+let historyStack = [];
+let historyIndex = -1;
+let historyJson = null;   // JSON of historyStack[historyIndex], for the "did anything change" check
+let historyTimer = null;
+let restoringHistory = false;
 // Which toolbar tab the property panel belongs to, set by renderPanel().
 // Kept after deselecting, since the dimmed panel still shows those controls.
 let panelTab = null;
@@ -281,6 +301,7 @@ function deleteSelected() {
   selected.destroy();
   select(null);
   recalcStageSize();
+  scheduleHistoryCommit();
 }
 
 // ---------- stage sizing ----------
@@ -376,6 +397,31 @@ function clearGuides() {
 // top edges — those are hard physical bounds (tape width, start of feed).
 // The bottom is deliberately left unclamped: dragging something further down
 // is how you make the label longer, and recalcStageSize() grows to fit it.
+// Centre the selected element within the printable area. Uses the on-screen
+// bounding box, so rotated elements centre by what you actually see. The
+// label's height grows to fit its content, so vertically "the label" means
+// the height the OTHER elements need — otherwise moving the bottom-most
+// element would shrink the label under it and it would no longer be centred.
+function centreSelected(axis) {
+  const node = selected;
+  if (!node) return;
+  const box = node.getClientRect({ relativeTo: stage });
+  if (axis === 'x') {
+    const target = MARGIN_LEFT + (LABEL_WIDTH - MARGIN_LEFT - MARGIN_RIGHT - box.width) / 2;
+    node.x(node.x() + target - box.x);
+  } else {
+    let bottom = Math.max(MIN_HEIGHT - MARGIN_BOTTOM, MARGIN_TOP + box.height);
+    for (const el of elements) {
+      if (el === node) continue;
+      const b = el.getClientRect({ relativeTo: stage });
+      bottom = Math.max(bottom, b.y + b.height);
+    }
+    const target = MARGIN_TOP + (bottom - MARGIN_TOP - box.height) / 2;
+    node.y(node.y() + target - box.y);
+  }
+  recalcStageSize();
+}
+
 function clampToPanel(node) {
   const box = node.getClientRect({ relativeTo: stage });
   const clampedX = Math.max(Math.min(box.x, LABEL_WIDTH - box.width), 0);
@@ -391,7 +437,7 @@ function registerElement(node, type, keepDropdownOpen) {
   node.setAttr('elementType', type);
   node.draggable(true);
   node.on('dragmove', () => { snapOnDragMove(node); clampToPanel(node); });
-  node.on('dragend', () => { clearGuides(); recalcStageSize(); });
+  node.on('dragend', () => { clearGuides(); recalcStageSize(); scheduleHistoryCommit(); });
   if (type === 'text') {
     // Text boxes always hug their text (see refitText), so every handle
     // means "make the text bigger/smaller": left/right handles scale it by
@@ -429,13 +475,19 @@ function registerElement(node, type, keepDropdownOpen) {
     clampToPanel(node);
     clearGuides();
     recalcStageSize();
+    scheduleHistoryCommit();
   });
   node.on('click tap', () => select(node));
   elements.push(node);
   layer.add(node);
   transformer.moveToTop();
+  // While undo/redo rebuilds the canvas, restoreHistory() picks the
+  // selection itself afterwards — selecting each element as it's re-added
+  // would flip the panel through all of them.
+  if (restoringHistory) return;
   select(node, keepDropdownOpen);
   recalcStageSize();
+  scheduleHistoryCommit();
 }
 
 // ---------- text elements ----------
@@ -587,6 +639,7 @@ function editText(node) {
       node.text(area.value);
       applyTightLineHeight(node);
     });
+    scheduleHistoryCommit();
     select(node);
   }
   area.addEventListener('blur', finish);
@@ -732,25 +785,55 @@ function insertIcon(glyph) {
   // properties either. Closed via its own ✕ button.
 }
 
+// Icons are SVGs, but they're rasterised to a PNG once on insert and kept as
+// the element's originalSrc — exactly like an uploaded photo — so the image
+// mode/threshold options work on them and templates save them self-contained.
 function insertIconImage(svgUrl) {
-  const img = new Image();
-  img.onload = () => {
-    const size = 80;
-    const node = new Konva.Image({
-      x: MARGIN_LEFT, y: MARGIN_TOP,
-      image: img,
-      width: size, height: size,
-    });
-    registerElement(node, 'image', true);
-    // Left open, same reasoning as insertIcon() — closed via its own ✕.
+  const svg = new Image();
+  svg.onload = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = svg.naturalWidth;
+    canvas.height = svg.naturalHeight;
+    canvas.getContext('2d').drawImage(svg, 0, 0);
+    const png = new Image();
+    png.onload = () => {
+      const height = 80;
+      const node = new Konva.Image({
+        x: MARGIN_LEFT, y: MARGIN_TOP,
+        image: png,
+        width: height * png.width / png.height, height,
+      });
+      node.setAttr('originalSrc', png.src);
+      node.setAttr('imageMode', 'grayscale');
+      node.setAttr('threshold', 128);
+      registerElement(node, 'image', true);
+      // Left open, same reasoning as insertIcon() — closed via its own ✕.
+    };
+    png.src = canvas.toDataURL('image/png');
   };
-  img.src = svgUrl;
+  svg.src = svgUrl;
 }
+
+// Several icon sets (see ICON_SETS in assets.py), switched with the chips
+// at the top of the picker. Categories and search both apply to whichever
+// set is active.
+const ICON_CREDITS = {
+  'game-icons': 'Clip art by Lorc, Delapouite &amp; contributors — <a href="https://game-icons.net" target="_blank" rel="noopener">game-icons.net</a> (CC BY 3.0)',
+  'noto': 'Emoji: <a href="https://github.com/googlefonts/noto-emoji" target="_blank" rel="noopener">Google Noto Emoji</a> (Apache 2.0)',
+  'fluent-emoji-high-contrast': 'Emoji: <a href="https://github.com/microsoft/fluentui-emoji" target="_blank" rel="noopener">Microsoft Fluent Emoji</a> (MIT)',
+  'material-symbols': 'Symbols: <a href="https://fonts.google.com/icons" target="_blank" rel="noopener">Google Material Symbols</a> (Apache 2.0)',
+};
+let iconSet = 'game-icons';
+let iconSetsCache = null;
+const iconCategoriesCache = {}; // set prefix -> [{id, label, count}]
+
+const iconUrl = (name) => `/api/icons/${iconSet}/${name}.svg`;
 
 function renderIconResults(names) {
   const results = document.getElementById('iconResults');
-  results.innerHTML = names.map(n => `<button type="button" data-name="${n}" title="${n}"><img src="/api/icons/${n}.svg" width="28" height="28" loading="lazy"></button>`).join('');
-  [...results.children].forEach(btn => btn.onclick = () => insertIconImage(`/api/icons/${btn.dataset.name}.svg`));
+  if (names.length === 0) { results.innerHTML = '<div class="hint">No matches.</div>'; return; }
+  results.innerHTML = names.map(n => `<button type="button" data-name="${n}" title="${n.replace(/-/g, ' ')}"><img src="${iconUrl(n)}" width="36" height="36" loading="lazy" alt="${n}"></button>`).join('');
+  [...results.children].forEach(btn => btn.onclick = () => insertIconImage(iconUrl(btn.dataset.name)));
 }
 
 let iconSearchTimer = null;
@@ -760,36 +843,70 @@ document.getElementById('iconSearch').addEventListener('input', (e) => {
   if (q) document.querySelectorAll('#iconCategories .chip').forEach(c => c.classList.remove('active'));
   if (q.length < 2) { document.getElementById('iconResults').innerHTML = ''; return; }
   iconSearchTimer = setTimeout(async () => {
-    const res = await fetch('/api/icons/search?q=' + encodeURIComponent(q));
+    const res = await fetch(`/api/icons/${iconSet}/search?q=` + encodeURIComponent(q));
     renderIconResults(await res.json());
   }, 350);
 });
 
-// Browsing by category exists for exactly the situation search can't help
-// with: you know roughly what you want ("something for weather") but not
-// the exact Material Symbols name.
-let iconCategoriesCache = null;
+async function showIconCategory(chip) {
+  const container = document.getElementById('iconCategories');
+  container.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+  chip.classList.add('active');
+  const res = await fetch(`/api/icons/${iconSet}/categories/` + encodeURIComponent(chip.dataset.cat));
+  renderIconResults(await res.json());
+}
 
+// Browsing by category exists for exactly the situation search can't help
+// with: you know roughly what you want ("something spooky") but not the
+// icon's exact name. The first category opens straight away so the picker
+// never starts as an empty box.
 async function renderIconCategoryChips() {
   const container = document.getElementById('iconCategories');
-  if (!iconCategoriesCache) {
-    const res = await fetch('/api/icons/categories');
-    iconCategoriesCache = await res.json();
+  document.getElementById('iconCredit').innerHTML = ICON_CREDITS[iconSet] || '';
+  if (!iconCategoriesCache[iconSet]) {
+    const res = await fetch(`/api/icons/${iconSet}/categories`);
+    iconCategoriesCache[iconSet] = await res.json();
   }
-  container.innerHTML = `<div class="chip-row">${iconCategoriesCache.map(c =>
+  container.innerHTML = `<div class="chip-row">${iconCategoriesCache[iconSet].map(c =>
     `<button type="button" class="chip" data-cat="${c.id}">${c.label} (${c.count})</button>`
   ).join('')}</div>`;
   [...container.querySelectorAll('.chip')].forEach(chip => {
-    chip.onclick = async () => {
-      const wasActive = chip.classList.contains('active');
-      container.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+    chip.onclick = () => {
       document.getElementById('iconSearch').value = '';
-      if (wasActive) { document.getElementById('iconResults').innerHTML = ''; return; }
-      chip.classList.add('active');
-      const res = await fetch('/api/icons/categories/' + encodeURIComponent(chip.dataset.cat));
-      renderIconResults(await res.json());
+      if (chip.classList.contains('active')) {
+        chip.classList.remove('active');
+        document.getElementById('iconResults').innerHTML = '';
+        return;
+      }
+      showIconCategory(chip);
     };
   });
+  const q = document.getElementById('iconSearch').value.trim();
+  if (q.length >= 2) {
+    document.getElementById('iconSearch').dispatchEvent(new Event('input'));
+  } else if (container.querySelector('.chip')) {
+    showIconCategory(container.querySelector('.chip'));
+  }
+}
+
+async function renderIconPicker() {
+  const container = document.getElementById('iconSets');
+  if (!iconSetsCache) {
+    const res = await fetch('/api/icons/sets');
+    iconSetsCache = await res.json();
+  }
+  container.innerHTML = iconSetsCache.map(s =>
+    `<button type="button" class="chip icon-set${s.id === iconSet ? ' active' : ''}" data-set="${s.id}">${s.label}</button>`
+  ).join('');
+  [...container.children].forEach(chip => {
+    chip.onclick = () => {
+      if (chip.dataset.set === iconSet) return;
+      iconSet = chip.dataset.set;
+      container.querySelectorAll('.chip').forEach(c => c.classList.toggle('active', c === chip));
+      renderIconCategoryChips();
+    };
+  });
+  renderIconCategoryChips();
 }
 
 // ---------- font library ----------
@@ -1143,6 +1260,10 @@ function renderPanel() {
         <button type="button" id="p_backward" title="Send backward">▼</button>
         <button type="button" id="p_toBack" title="Send to back">⤓</button>
       </div>
+      <div class="row">
+        <button type="button" id="p_centreH" title="Centre across the label">↔ Centre</button>
+        <button type="button" id="p_centreV" title="Centre down the label">↕ Centre</button>
+      </div>
       <button id="p_delete">Delete</button>
     </div>`;
   panel.innerHTML = html;
@@ -1151,6 +1272,8 @@ function renderPanel() {
   document.getElementById('p_forward').addEventListener('click', () => { selected.moveUp(); transformer.moveToTop(); layer.draw(); });
   document.getElementById('p_backward').addEventListener('click', () => { selected.moveDown(); transformer.moveToTop(); layer.draw(); });
   document.getElementById('p_toBack').addEventListener('click', () => { selected.moveToBottom(); transformer.moveToTop(); layer.draw(); });
+  document.getElementById('p_centreH').addEventListener('click', () => centreSelected('x'));
+  document.getElementById('p_centreV').addEventListener('click', () => centreSelected('y'));
 
   if (isDateField) {
     document.getElementById('p_datevalue').addEventListener('change', (e) => {
@@ -1239,7 +1362,7 @@ document.getElementById('imageInput').onchange = (e) => {
 const iconStarter = document.getElementById('iconStarter');
 iconStarter.innerHTML = STARTER_ICONS.map(g => `<button type="button">${g}</button>`).join('');
 [...iconStarter.children].forEach((btn, i) => btn.onclick = () => insertIcon(STARTER_ICONS[i]));
-document.getElementById('addIconBtn').onclick = () => toggleDropdown('iconPicker', renderIconCategoryChips);
+document.getElementById('addIconBtn').onclick = () => toggleDropdown('iconPicker', renderIconPicker);
 
 // ---------- templates (save/load named designs) ----------
 
@@ -1262,6 +1385,7 @@ function serializeElement(node) {
       fontStyle: node.fontStyle(),
       isDateField: !!node.getAttr('isDateField'),
       dateFormat: node.getAttr('dateFormat') || null,
+      dateValue: node.getAttr('dateValue') || null,
     });
   }
   if (type === 'border') {
@@ -1280,11 +1404,15 @@ function serializeElement(node) {
   return base;
 }
 
+// In stacking order (back to front), not the order elements were added —
+// the ⤒▲▼⤓ buttons reorder the Konva layer without touching `elements`.
 function serializeCanvas() {
-  return elements.map(serializeElement);
+  return [...elements].sort((a, b) => a.zIndex() - b.zIndex()).map(serializeElement);
 }
 
-function deserializeElement(desc) {
+// keepDate: undo/redo passes true to restore a date field exactly as it
+// was; loading a template leaves it false so the date resets to today.
+function deserializeElement(desc, keepDate) {
   if (desc.type === 'text') {
     const node = new Konva.Text({
       x: desc.x, y: desc.y, rotation: desc.rotation,
@@ -1308,7 +1436,7 @@ function deserializeElement(desc) {
       node.setAttr('dateFormat', desc.dateFormat);
       // Deliberately NOT restoring the saved date — a reused template should
       // default to today, which is the whole point of a "date" field.
-      node.setAttr('dateValue', toLocalISODate(new Date()));
+      node.setAttr('dateValue', keepDate && desc.dateValue ? desc.dateValue : toLocalISODate(new Date()));
       node.text(formatDate(node.getAttr('dateValue'), desc.dateFormat));
     }
     applyTightLineHeight(node);
@@ -1338,21 +1466,101 @@ function deserializeElement(desc) {
   }
 
   if (desc.type === 'image') {
+    // Added straight away (drawn once the pixels arrive) rather than from
+    // onload, so images keep their place in the stacking order instead of
+    // landing on top of whatever finished loading first.
     const imgObj = new Image();
+    const node = new Konva.Image({
+      x: desc.x, y: desc.y, rotation: desc.rotation,
+      image: imgObj, width: desc.width, height: desc.height,
+    });
+    node.setAttr('originalSrc', desc.originalSrc);
+    node.setAttr('imageMode', desc.imageMode);
+    node.setAttr('threshold', desc.threshold);
     imgObj.onload = () => {
-      const node = new Konva.Image({
-        x: desc.x, y: desc.y, rotation: desc.rotation,
-        image: imgObj, width: desc.width, height: desc.height,
-      });
-      node.setAttr('originalSrc', desc.originalSrc);
-      node.setAttr('imageMode', desc.imageMode);
-      node.setAttr('threshold', desc.threshold);
-      registerElement(node, 'image');
       if (desc.imageMode === 'bw') applyImageMode(node);
+      else layer.batchDraw();
     };
     imgObj.src = desc.originalSrc;
+    registerElement(node, 'image');
   }
 }
+
+// ---------- undo / redo ----------
+// Snapshots of the whole design (the same serialized form templates use),
+// taken shortly after anything changes. Debounced so dragging a slider is
+// one undo step, not dozens, and skipped when nothing actually changed
+// (e.g. clicking a button that didn't alter the design).
+
+
+function commitHistory() {
+  clearTimeout(historyTimer);
+  const snap = serializeCanvas();
+  const json = JSON.stringify(snap);
+  if (json === historyJson) return;
+  historyStack = historyStack.slice(0, historyIndex + 1);
+  historyStack.push(snap);
+  if (historyStack.length > HISTORY_LIMIT) historyStack.shift();
+  historyIndex = historyStack.length - 1;
+  historyJson = json;
+  updateHistoryButtons();
+}
+
+function scheduleHistoryCommit() {
+  if (restoringHistory) return;
+  clearTimeout(historyTimer);
+  historyTimer = setTimeout(commitHistory, 400);
+}
+
+function restoreHistory(index) {
+  // Selection is remembered by stacking position, since the nodes
+  // themselves are all recreated.
+  const order = [...elements].sort((a, b) => a.zIndex() - b.zIndex());
+  const selectedPos = selected ? order.indexOf(selected) : -1;
+
+  historyIndex = index;
+  historyJson = JSON.stringify(historyStack[index]);
+  restoringHistory = true;
+  clearCanvas();
+  historyStack[index].forEach(desc => deserializeElement(desc, true));
+  restoringHistory = false;
+  recalcStageSize();
+  if (selectedPos >= 0 && selectedPos < elements.length) select(elements[selectedPos], true);
+  updateHistoryButtons();
+}
+
+function undo() {
+  commitHistory(); // flush a pending change first, so it's the one undone
+  if (historyIndex > 0) restoreHistory(historyIndex - 1);
+}
+
+function redo() {
+  if (historyIndex < historyStack.length - 1) restoreHistory(historyIndex + 1);
+}
+
+function updateHistoryButtons() {
+  document.getElementById('undoBtn').disabled = historyIndex <= 0;
+  document.getElementById('redoBtn').disabled = historyIndex >= historyStack.length - 1;
+}
+
+document.getElementById('undoBtn').onclick = undo;
+document.getElementById('redoBtn').onclick = redo;
+
+document.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  const tag = document.activeElement.tagName;
+  if (tag === 'TEXTAREA' || tag === 'INPUT') return; // leave text fields their own undo
+  const key = e.key.toLowerCase();
+  if (key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+  else if ((key === 'z' && e.shiftKey) || key === 'y') { e.preventDefault(); redo(); }
+});
+
+// Every property-panel control (sliders, dropdowns, checkboxes, the font
+// picker, arrange/centre buttons…) changes the selected element, so rather
+// than wiring each one individually, any interaction with the panel queues
+// a snapshot; commitHistory() ignores the ones that changed nothing.
+['input', 'change', 'click'].forEach(type =>
+  document.getElementById('panel').addEventListener(type, scheduleHistoryCommit));
 
 function loadTemplateData(data) {
   clearCanvas();
@@ -1414,6 +1622,33 @@ document.getElementById('templateSaveBtn').onclick = async () => {
 };
 
 // ---------- print ----------
+
+// Checked on load, every 15s, and whenever the tab comes back into view, so
+// "printer is off" shows up before you press Print rather than after.
+const PRINTER_OFFLINE_MSG = 'Printer offline — is it switched on?';
+
+async function checkPrinter() {
+  let online;
+  try {
+    online = (await (await fetch('/api/printer/status')).json()).online;
+  } catch {
+    return; // server unreachable — nothing useful to say about the printer
+  }
+  const btn = document.getElementById('printBtn');
+  const status = document.getElementById('status');
+  btn.classList.toggle('offline', !online);
+  btn.title = online ? '' : PRINTER_OFFLINE_MSG;
+  if (!online && !status.textContent) {
+    status.textContent = PRINTER_OFFLINE_MSG;
+    status.className = 'error';
+  } else if (online && status.textContent === PRINTER_OFFLINE_MSG) {
+    status.textContent = '';
+    status.className = '';
+  }
+}
+checkPrinter();
+setInterval(() => { if (!document.hidden) checkPrinter(); }, 15000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkPrinter(); });
 
 document.getElementById('printBtn').onclick = async () => {
   select(null); // deselect first so the Transformer's handles aren't in the exported image

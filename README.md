@@ -10,12 +10,15 @@ It started as a replacement for [brother_ql_web](https://github.com/pklaus/broth
 
 - **Text** with bold/italic, resize from any handle, and "Fit to width" to make it as large as the label allows
 - **Any Google Font**, searchable by name or category and installed on demand
-- **Icons** from Google's Material Symbols set, searchable or browsable by category
+- **Clip art, emoji and icons**: fantasy, animal, space, sea and other clip art, colour or outline emoji, and Material Symbols, all searchable or browsable by category
 - **Images**, converted to black and white with an adjustable threshold
 - **Dates**: insert today's date, pick one, nudge ±1 day, choose the format. Saved templates reset to today when loaded.
 - **Borders and lines**: solid, dashed, dotted and rounded
 - **Snapping** to the printable margins, the centre line and other elements while moving or resizing
 - **Layering**: bring to front / send to back
+- **Centring**: centre an element across or down the label in one tap
+- **Undo / redo**: buttons, or Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z
+- **Printer status**: the Print button greys out with a warning when the printer is switched off
 - **Templates**: save, load and delete named designs (stored on the server)
 - **Installable** as a home-screen app on phones and tablets
 
@@ -90,7 +93,7 @@ These are created at runtime and ignored by git, so pulling updates won't overwr
 Font and icon search call out to third-party services. If one of them goes down, that search stops working, but designing and printing still work.
 
 - Font search and metadata: [google-webfonts-helper](https://gwfh.mranftl.com), with font files downloaded from Google Fonts
-- Icons: Google's [material-design-icons](https://github.com/google/material-design-icons) repository on GitHub
+- Clip art, emoji and icons: the [Iconify API](https://iconify.design) (each one is cached locally after first use)
 
 ## Credits
 
@@ -99,6 +102,9 @@ Font and icon search call out to third-party services. If one of them goes down,
 - [Konva](https://konvajs.org) (MIT): canvas editor
 - [DejaVu fonts](https://dejavu-fonts.github.io) (free license): the bundled default font
 - [Material Symbols](https://fonts.google.com/icons) (Apache 2.0): icons
+- [game-icons.net](https://game-icons.net) by Lorc, Delapouite and contributors ([CC BY 3.0](https://creativecommons.org/licenses/by/3.0/)): clip art
+- [Noto Emoji](https://github.com/googlefonts/noto-emoji) by Google (Apache 2.0): colour emoji
+- [Fluent Emoji](https://github.com/microsoft/fluentui-emoji) by Microsoft (MIT): outline emoji
 - App icon: [Printer icons created by Eucalyp - Flaticon](https://www.flaticon.com/free-icons/printer) ([this icon](https://www.flaticon.com/free-icon/barcode_2170543), [Eucalyp's profile](https://www.flaticon.com/authors/eucalyp))
 
 This project was written with the help of [Claude Code](https://claude.com/claude-code).

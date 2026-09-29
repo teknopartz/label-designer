@@ -25,6 +25,21 @@ def _load_uploaded_image():
     return img, None
 
 
+def _printer():
+    return PrinterQueue(
+        model=current_app.config['PRINTER_MODEL'],
+        device_specifier=current_app.config['PRINTER_DEVICE'],
+        label_size=current_app.config['LABEL_SIZE'],
+    )
+
+
+# Polled by the editor so it can warn that the printer is off before you
+# press Print, rather than only after.
+@bp.route('/api/printer/status')
+def printer_status():
+    return jsonify(online=_printer().device_present())
+
+
 @bp.route('/api/print', methods=['POST'])
 def print_label():
     img, error = _load_uploaded_image()
@@ -32,11 +47,7 @@ def print_label():
         message, status = error
         return jsonify(success=False, message=message), status
 
-    printer = PrinterQueue(
-        model=current_app.config['PRINTER_MODEL'],
-        device_specifier=current_app.config['PRINTER_DEVICE'],
-        label_size=current_app.config['LABEL_SIZE'],
-    )
+    printer = _printer()
 
     if not printer.device_present():
         return jsonify(
@@ -98,40 +109,45 @@ def fonts_install():
         return jsonify(error=str(e)), 502
 
 
-@bp.route('/api/icons/search')
-def icons_search():
+@bp.route('/api/icons/sets')
+def icon_sets():
+    return jsonify(assets.list_icon_sets())
+
+
+@bp.route('/api/icons/<prefix>/search')
+def icons_search(prefix):
     q = request.args.get('q', '')
     if len(q) < 2:
         return jsonify([])
     try:
-        return jsonify(assets.search_icons(q))
+        return jsonify(assets.search_icons(prefix, q))
     except Exception as e:
         current_app.logger.exception("Icon search failed")
         return jsonify(error=str(e)), 502
 
 
-@bp.route('/api/icons/categories')
-def icon_categories():
+@bp.route('/api/icons/<prefix>/categories')
+def icon_categories(prefix):
     try:
-        return jsonify(assets.list_icon_categories())
+        return jsonify(assets.list_icon_categories(prefix))
     except Exception as e:
         current_app.logger.exception("Icon category list failed")
         return jsonify(error=str(e)), 502
 
 
-@bp.route('/api/icons/categories/<category>')
-def icon_category(category):
+@bp.route('/api/icons/<prefix>/categories/<path:category>')
+def icon_category(prefix, category):
     try:
-        return jsonify(assets.icons_in_category(category))
+        return jsonify(assets.icons_in_category(prefix, category))
     except Exception as e:
         current_app.logger.exception("Icon category fetch failed")
         return jsonify(error=str(e)), 502
 
 
-@bp.route('/api/icons/<name>.svg')
-def icon_svg(name):
+@bp.route('/api/icons/<prefix>/<name>.svg')
+def icon_svg(prefix, name):
     try:
-        path = assets.get_icon_svg_path(name)
+        path = assets.get_icon_svg_path(prefix, name)
     except Exception as e:
         return jsonify(error=str(e)), 404
     return send_file(path, mimetype='image/svg+xml')
