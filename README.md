@@ -17,6 +17,7 @@ It started as a replacement for [brother_ql_web](https://github.com/pklaus/broth
 - **Snapping** to the printable margins, the centre line and other elements while moving or resizing
 - **Layering**: bring to front / send to back
 - **Centring**: centre an element across or down the label in one tap
+- **Magic fit**: one tap scales everything up to fill the tape, spaced evenly, centred, with a margin all round
 - **Undo / redo**: buttons, or Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z
 - **Printer status**: the Print button greys out with a warning when the printer is switched off
 - **Templates**: save, load and delete named designs (stored on the server)

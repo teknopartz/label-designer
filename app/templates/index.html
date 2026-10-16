@@ -19,7 +19,16 @@
     .title-emoji { font-size: 1.35em; vertical-align: -0.08em; }
     .title-letter { display: inline-block; margin-right: 0.12em; }
     .title-sub { display: block; font-weight: normal; color: #888; font-size: 0.25em; margin-top: 8px; }
-    .layout { display: flex; flex-direction: column; gap: 16px; position: relative; }
+    /* Canvas in the middle column, the action buttons in the margins either
+       side of it: undo/redo, Magic fit and Templates bottom-left, the status
+       message and Print bottom-right. A grid rather than absolutely
+       positioned corners, so the buttons can never overlap the label — when
+       space gets tight the canvas column gives way (scaleToViewport shrinks
+       the label to fit), and below 1000px the buttons drop underneath. */
+    .layout { display: grid; grid-template-columns: 1fr auto 1fr; grid-template-areas: "left stage right"; gap: 16px; align-items: end; }
+    @media (max-width: 1000px) {
+      .layout { grid-template-columns: 1fr 1fr; grid-template-areas: "stage stage" "left right"; }
+    }
     /* Grid (not flex) so button width stays consistent across wrapped
        rows — columns are sized once for the whole toolbar and reused on
        every row, so a short last row leaves blank space on the right
@@ -33,10 +42,12 @@
     .toolbar button { padding: 14px 16px; font-size: 1.05rem; cursor: pointer; background: #e9e9ec; color: #555; border: 1px solid #ccc; border-bottom: none; border-radius: 8px 8px 0 0; }
     .toolbar button:hover { background: #f2f2f5; }
     .toolbar button.tab-active { background: #fafcff; color: #222; font-weight: 600; margin-bottom: -1px; padding-bottom: 15px; }
-    /* Sized to hug its actual content (the canvas) — must NOT flex-grow past
-       that, or the background visually extends past the true label edge
-       while dragged elements still clip exactly at the real boundary. */
-    #stage-wrap { border: 1px solid #ccc; background: #fafafa; padding: 12px; display: inline-block; max-width: 100%; overflow-x: auto; flex: 0 0 auto; align-self: center; }
+    /* Sized to hug its actual content (the canvas) — must NOT stretch to
+       fill its grid column, or the background visually extends past the
+       true label edge while dragged elements still clip exactly at the real
+       boundary. max-width limits the content box, so it leaves room for the
+       padding and border, or they'd spill out of the column. */
+    #stage-wrap { grid-area: stage; justify-self: center; align-self: start; border: 1px solid #ccc; background: #fafafa; padding: 12px; max-width: calc(100% - 26px); overflow-x: auto; }
     #stage-container { transform-origin: top left; }
 
     /* Property panel: shares the .dropdown-panel card chrome (border/
@@ -73,14 +84,14 @@
     .font-dropdown-item:hover, .font-dropdown-item:focus { background: #f0f6ff; }
     .font-dropdown-item.selected { background: #e6f0ff; }
 
-    /* Anchored to the bottom corners of .layout (i.e. the canvas box, its
-       only in-flow content) rather than sitting in normal flow below it —
-       the canvas is narrower and centered, so this uses the margin space
-       beside it instead of adding a gap underneath. Print bottom-right,
-       Templates mirrored bottom-left. */
-    .actions { position: absolute; right: 0; bottom: 0; margin: 0; }
-    .actions-left { right: auto; left: 0; }
-    .actions button { padding: 10px 20px; font-size: 1rem; cursor: pointer; }
+    /* Each side is a column stacked from the bottom up (see .layout). Both
+       share one min-width so the canvas stays centred even when the grid is
+       squeezing the side columns down to their minimum. */
+    .actions { grid-area: right; justify-self: end; min-width: 150px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+    .actions-left { grid-area: left; justify-self: start; align-items: stretch; }
+    .actions button { padding: 10px 20px; font-size: 1rem; cursor: pointer; white-space: nowrap; }
+    .history-row { display: flex; gap: 8px; }
+    .history-row button { flex: 1; padding: 6px 0; font-size: 1.3rem; line-height: 1; }
     /* Print gets extra weight — same footprint as a toolbar button (it's
        the one action that actually matters), a bold border year-round, and
        a pulsing purple glow on hover to invite the tap. */
@@ -94,7 +105,9 @@
       0%, 100% { box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.55); }
       50% { box-shadow: 0 0 0 9px rgba(124, 58, 237, 0); }
     }
-    #status { margin-top: 12px; font-size: 0.9rem; min-height: 1.2em; text-align: right; }
+    /* Sits in the margin beside the label, above Print — narrow on
+       purpose, so longer messages wrap onto two lines there. */
+    #status { max-width: 170px; font-size: 0.85rem; line-height: 1.3; text-align: right; }
     .error { color: #b00; }
     .ok { color: #060; }
     .hint { font-size: 0.8rem; color: #888; }
@@ -180,15 +193,18 @@
   <div class="layout">
     <div id="stage-wrap"><div id="stage-container"></div></div>
     <div class="actions actions-left">
+      <div class="history-row">
+        <button id="undoBtn" title="Undo (Ctrl+Z)" aria-label="Undo" disabled>↶</button>
+        <button id="redoBtn" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" disabled>↷</button>
+      </div>
+      <button id="magicFitBtn" title="Make everything as large as fits, evenly spaced and centred, with a margin all round">✨ Magic fit</button>
       <button id="templatesBtn">📁 Templates</button>
-      <button id="undoBtn" title="Undo (Ctrl+Z)" aria-label="Undo" disabled>↶</button>
-      <button id="redoBtn" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" disabled>↷</button>
     </div>
     <div class="actions">
+      <div id="status"></div>
       <button id="printBtn">🖨️ Print</button>
     </div>
   </div>
-  <div id="status"></div>
 
 <script src="/static/vendor/konva.min.js"></script>
 {% raw %}
@@ -306,13 +322,19 @@ function deleteSelected() {
 
 // ---------- stage sizing ----------
 
+// The label is continuous tape, so its length comes from the content: it
+// ends as far below the lowest element as the highest one starts below the
+// top edge. That keeps every label vertically balanced when printed — move
+// everything down for more room and the margin underneath grows to match.
 function recalcStageSize() {
-  let maxBottom = MIN_HEIGHT - MARGIN_BOTTOM;
+  let minTop = Infinity, maxBottom = 0;
   for (const el of elements) {
     const box = el.getClientRect({ relativeTo: stage });
+    minTop = Math.min(minTop, box.y);
     maxBottom = Math.max(maxBottom, box.y + box.height);
   }
-  stage.height(Math.max(maxBottom + MARGIN_BOTTOM, MIN_HEIGHT));
+  const bottomMargin = elements.length ? Math.max(MARGIN_BOTTOM, minTop) : MARGIN_BOTTOM;
+  stage.height(Math.max(maxBottom + bottomMargin, MIN_HEIGHT));
   scaleToViewport();
   layer.draw();
 }
@@ -400,8 +422,11 @@ function clearGuides() {
 // Centre the selected element within the printable area. Uses the on-screen
 // bounding box, so rotated elements centre by what you actually see. The
 // label's height grows to fit its content, so vertically "the label" means
-// the height the OTHER elements need — otherwise moving the bottom-most
-// element would shrink the label under it and it would no longer be centred.
+// the space the OTHER elements span — otherwise moving the top- or
+// bottom-most element would resize the label around it and it would no
+// longer be centred. On its own, an element just goes to the top margin
+// (the bottom margin matches it, see recalcStageSize), or the middle of the
+// minimum-height label if it's smaller than that.
 function centreSelected(axis) {
   const node = selected;
   if (!node) return;
@@ -410,13 +435,15 @@ function centreSelected(axis) {
     const target = MARGIN_LEFT + (LABEL_WIDTH - MARGIN_LEFT - MARGIN_RIGHT - box.width) / 2;
     node.x(node.x() + target - box.x);
   } else {
-    let bottom = Math.max(MIN_HEIGHT - MARGIN_BOTTOM, MARGIN_TOP + box.height);
+    let top = Infinity, bottom = -Infinity;
     for (const el of elements) {
       if (el === node) continue;
       const b = el.getClientRect({ relativeTo: stage });
+      top = Math.min(top, b.y);
       bottom = Math.max(bottom, b.y + b.height);
     }
-    const target = MARGIN_TOP + (bottom - MARGIN_TOP - box.height) / 2;
+    if (top === Infinity) { top = MARGIN_TOP; bottom = Math.max(MIN_HEIGHT - MARGIN_BOTTOM, MARGIN_TOP + box.height); }
+    const target = Math.max(MARGIN_TOP, (top + bottom - box.height) / 2);
     node.y(node.y() + target - box.y);
   }
   recalcStageSize();
@@ -492,42 +519,107 @@ function registerElement(node, type, keepDropdownOpen) {
 
 // ---------- text elements ----------
 
-// Text elements keep Konva's default auto width, so the box is always
-// exactly as wide as its widest line — no dead space either side, and the
-// box edges ARE the text edges for snapping to margins/other elements.
-// Multiple lines only come from explicit newlines, centered on each other.
+// Konva.Text sizes its box from font-wide numbers (the advance width, and
+// fontSize × lineHeight tall) and draws each line centred on the font's em
+// box, so real glyphs routinely spill out of it: script fonts loop past
+// both ends (Pacifico at 103px pokes 28px above its box), serif capitals
+// overshoot the top, and room is kept for descenders a word may not have.
+// Everything here works from the box — the handles, snapping, centring,
+// Fit to width, Magic fit, the label's own height — so spilled ink could
+// be clipped at the tape edge or run into its neighbours.
 //
-// The catch is that any change to the text or its font changes the box
-// width, which by default grows/shrinks from the left edge. refitText()
-// wraps such a change and keeps whichever edge the user lined up: a left
-// or right edge sitting on a snap stop (margin, another element's edge)
-// stays put; anything else stays centered where it was.
+// InkText measures the actual ink of each line (canvas measureText's
+// actualBoundingBox*) and makes the box exactly that: x/y is the top-left
+// of the visible glyphs, width/height their extent. Lines sit
+// fontSize × lineHeight apart (baseline to baseline), centred on each other
+// by their ink. Multiple lines only come from explicit newlines — no
+// wrapping, the box is always as wide as its widest line.
+const inkCtx = document.createElement('canvas').getContext('2d');
+
+class InkText extends Konva.Text {
+  // Konva calls this whenever the text, font or size changes.
+  _setTextData() {
+    super._setTextData();
+    inkCtx.font = this._getContextFont();
+    const fontSize = this.fontSize(), pitch = fontSize * this.lineHeight();
+    let top = Infinity, bottom = -Infinity, width = 0;
+    const lines = [];
+    this.textArr.forEach((l, i) => {
+      if (!l.text.trim()) return;
+      const m = inkCtx.measureText(l.text);
+      const line = { text: l.text, left: m.actualBoundingBoxLeft, width: m.actualBoundingBoxLeft + m.actualBoundingBoxRight, baseline: i * pitch };
+      top = Math.min(top, line.baseline - m.actualBoundingBoxAscent);
+      bottom = Math.max(bottom, line.baseline + m.actualBoundingBoxDescent);
+      width = Math.max(width, line.width);
+      lines.push(line);
+    });
+    if (!lines.length) {
+      // Nothing visible (empty, or only spaces): keep a fontSize-tall box so
+      // there's still something to select and double-click.
+      this.ink = { lines, width: Math.max(1, this.textWidth), height: fontSize, baseline: fontSize * 0.8 };
+      return;
+    }
+    const align = this.align();
+    for (const line of lines) {
+      const free = width - line.width;
+      // x is where fillText starts the line, so its ink begins `left` later.
+      line.x = (align === 'center' ? free / 2 : align === 'right' ? free : 0) + line.left;
+      line.baseline -= top;
+    }
+    this.ink = { lines, width, height: bottom - top, baseline: -top };
+  }
+  getWidth() { return this.ink ? this.ink.width : 0; }
+  getHeight() { return this.ink ? this.ink.height : 0; }
+  _sceneFunc(context) {
+    context.setAttr('font', this._getContextFont());
+    context.setAttr('textBaseline', 'alphabetic');
+    context.setAttr('textAlign', 'left');
+    for (const line of this.ink.lines) {
+      this._partialText = line.text;
+      this._partialTextX = line.x;
+      this._partialTextY = line.baseline;
+      context.fillStrokeShape(this);
+    }
+  }
+}
+// The transformer only redraws its handles when one of these changes.
+// Konva.Text leaves out font family and style — its box doesn't depend on
+// them — but the ink box does.
+InkText.prototype._attrsAffectingSize = [...Konva.Text.prototype._attrsAffectingSize, 'fontFamily', 'fontStyle'];
+
+// Any change to the text or its font changes the box size, which by default
+// grows/shrinks from the top-left corner. refitText() wraps such a change
+// and keeps whichever edge the user lined up: an edge sitting on a snap stop
+// (margin, another element's edge) stays put; otherwise the text stays
+// centred where it was, across and down — so a word next to the date stays
+// level with it even when the new word has taller letters or descenders.
 const EDGE_TOLERANCE = 2; // px — snapping makes lined-up edges exact, this just absorbs float noise
 
 function refitText(node, change) {
-  const oldWidth = node.width();
+  const oldWidth = node.width(), oldHeight = node.height();
   const box = node.getClientRect({ relativeTo: stage });
   change();
-  const dw = node.width() - oldWidth;
-  if (dw) {
-    let shift = -dw / 2;
-    if (node.rotation() === 0) {
-      const stops = getGuideStops(node).vertical;
-      const onStop = (edge) => stops.some(s => Math.abs(edge - s) <= EDGE_TOLERANCE);
-      if (onStop(box.x)) shift = 0;
-      else if (onStop(box.x + box.width)) shift = -dw;
-    }
-    shiftAlongText(node, shift);
+  const dw = node.width() - oldWidth, dh = node.height() - oldHeight;
+  let dx = -dw / 2, dy = -dh / 2;
+  if (node.rotation() === 0) {
+    const stops = getGuideStops(node);
+    const onStop = (list, edge) => list.some(s => Math.abs(edge - s) <= EDGE_TOLERANCE);
+    if (onStop(stops.vertical, box.x)) dx = 0;
+    else if (onStop(stops.vertical, box.x + box.width)) dx = -dw;
+    if (onStop(stops.horizontal, box.y)) dy = 0;
+    else if (onStop(stops.horizontal, box.y + box.height)) dy = -dh;
   }
+  shiftAlongText(node, dx, dy);
   clampToPanel(node);
   recalcStageSize();
 }
 
-// Move a text node along its own (possibly rotated) baseline direction.
-function shiftAlongText(node, dx) {
+// Move a text node within its own (possibly rotated) frame: dx along the
+// baseline, dy perpendicular to it.
+function shiftAlongText(node, dx, dy = 0) {
   const r = node.rotation() * Math.PI / 180;
-  node.x(node.x() + dx * Math.cos(r));
-  node.y(node.y() + dx * Math.sin(r));
+  node.x(node.x() + dx * Math.cos(r) - dy * Math.sin(r));
+  node.y(node.y() + dx * Math.sin(r) + dy * Math.cos(r));
 }
 
 // Largest font size that fits the text across the printable width, centered.
@@ -541,17 +633,8 @@ function fitTextToWidth(node) {
   recalcStageSize();
 }
 
-// Konva sizes a text box tall enough to hold a descender (g/j/p/q/y) on
-// every line, so it doesn't clip descending text — but that headroom goes
-// unused (and wastes vertical space on the printed label) whenever the
-// current text happens to have no descenders, e.g. plain words or a
-// formatted date. Only tighten the box when it's actually safe to.
-function applyTightLineHeight(node) {
-  node.lineHeight(/[gjpqy]/.test(node.text()) ? 1 : 0.85);
-}
-
 function addText() {
-  const node = new Konva.Text({
+  const node = new InkText({
     x: MARGIN_LEFT, y: MARGIN_TOP,
     text: 'New text',
     fontSize: 50,
@@ -560,7 +643,6 @@ function addText() {
     fill: 'black',
     align: 'center',
   });
-  applyTightLineHeight(node);
   node.on('dblclick dbltap', () => editText(node));
   registerElement(node, 'text');
   return node;
@@ -603,13 +685,22 @@ function editText(node) {
     area.style.height = 'auto';
     area.style.height = area.scrollHeight + 'px';
   }
+  // The node's box is its ink, but the textarea lays text out in CSS line
+  // boxes (half the leading, then the font's ascent, down to the first
+  // baseline), so line the two up by first baseline and first line start
+  // rather than by top-left corner — otherwise the text jumps on editing.
+  inkCtx.font = node._getContextFont();
+  const fm = inkCtx.measureText('M');
+  const cssBaseline = (node.fontSize() * node.lineHeight() - fm.fontBoundingBoxAscent - fm.fontBoundingBoxDescent) / 2 + fm.fontBoundingBoxAscent;
+  const firstLineX = node.ink.lines.length ? node.ink.lines[0].x : 0;
   function reposition() {
     const rect = stage.container().getBoundingClientRect();
     const scale = stage.scaleX() || (parseFloat(document.getElementById('stage-container').style.transform.replace(/[^0-9.]/g, '')) || 1);
     minWidth = Math.max(120, node.width() * scale);
     Object.assign(area.style, {
-      top: (rect.top + window.scrollY + node.y() * scale) + 'px',
-      left: (rect.left + window.scrollX + node.x() * scale) + 'px',
+      // -1: the textarea's border
+      top: (rect.top + window.scrollY + (node.y() + node.ink.baseline - cssBaseline) * scale - 1) + 'px',
+      left: (rect.left + window.scrollX + (node.x() + firstLineX) * scale - 1) + 'px',
       fontSize: (node.fontSize() * scale) + 'px',
       fontFamily: node.fontFamily(),
       fontWeight: node.fontStyle().includes('bold') ? 'bold' : 'normal',
@@ -635,10 +726,7 @@ function editText(node) {
     window.removeEventListener('resize', reposition);
     document.body.removeChild(area);
     node.show();
-    refitText(node, () => {
-      node.text(area.value);
-      applyTightLineHeight(node);
-    });
+    refitText(node, () => node.text(area.value));
     scheduleHistoryCommit();
     select(node);
   }
@@ -734,7 +822,7 @@ function toLocalISODate(d) {
 
 function addDateField() {
   const today = toLocalISODate(new Date());
-  const node = new Konva.Text({
+  const node = new InkText({
     x: MARGIN_LEFT, y: MARGIN_TOP,
     text: formatDate(today, 'dmy_slash'),
     fontSize: 50,
@@ -743,7 +831,6 @@ function addDateField() {
     fill: 'black',
     align: 'center',
   });
-  applyTightLineHeight(node);
   // Right-align to the far edge of the label instead of dropping it at the
   // same top-left spot as everything else, where it lands on top of
   // whatever text is already there.
@@ -756,10 +843,7 @@ function addDateField() {
 }
 
 function updateDateField(node) {
-  refitText(node, () => {
-    node.text(formatDate(node.getAttr('dateValue'), node.getAttr('dateFormat')));
-    applyTightLineHeight(node);
-  });
+  refitText(node, () => node.text(formatDate(node.getAttr('dateValue'), node.getAttr('dateFormat'))));
 }
 
 // ---------- icon elements ----------
@@ -769,7 +853,7 @@ function updateDateField(node) {
 const STARTER_ICONS = ['★', '✓', '✗', '⚠', '❄', '☀', '☂', '✉'];
 
 function insertIcon(glyph) {
-  const node = new Konva.Text({
+  const node = new InkText({
     x: MARGIN_LEFT, y: MARGIN_TOP,
     text: glyph,
     fontSize: 80,
@@ -1138,6 +1222,140 @@ function addLine() {
   registerElement(node, 'line');
 }
 
+// ---------- magic fit ----------
+// One tap to make the whole design as large as the tape allows. Elements
+// side by side stay side by side and stacked rows stay stacked, but each row
+// is evenly spaced, centred across the label, and its elements centred on
+// each other vertically. Everything is scaled by the same amount, so a date
+// that was smaller than the name beside it stays smaller. The label gets a
+// margin top and bottom (the bottom follows the top, see recalcStageSize).
+//
+// Two kinds of element are fitted around the result instead of scaled with
+// it: a border framing everything keeps its side insets and is re-fitted to
+// the new height, and a horizontal line is treated as a divider between
+// rows and stretched to the width of the widest row.
+const FIT_SIDE = 14;      // px each side, about 1.2 mm
+const FIT_TOP = 24;       // px top (and so bottom), about 2 mm
+const FIT_GAP = 0.3;      // space between elements in a row, × the row's height
+const FIT_ROW_GAP = 0.2;  // space between rows, × the shorter row's height
+const FRAME_PAD = 12;     // px between a framing border and what's inside it
+
+function magicFit() {
+  const boxOf = (n) => n.getClientRect({ relativeTo: stage });
+  const type = (n) => n.getAttr('elementType');
+  const isRule = (n) => type(n) === 'line' && n.rotation() === 0 && n.points().every((v, i) => i % 2 === 0 || v === n.points()[1]);
+  const framed = (outer, inner) => outer.x <= inner.x + 1 && outer.y <= inner.y + 1 &&
+    outer.x + outer.width >= inner.x + inner.width - 1 && outer.y + outer.height >= inner.y + inner.height - 1;
+
+  const candidates = elements.filter(n => type(n) !== 'border' || n.rotation() !== 0);
+  const frames = elements.filter(n => type(n) === 'border' && n.rotation() === 0 &&
+    candidates.length && candidates.every(c => framed(boxOf(n), boxOf(c))));
+  const rules = candidates.filter(isRule);
+  const items = elements.filter(n => !frames.includes(n) && !rules.includes(n));
+  if (!items.length) return;
+
+  // Rows: elements whose heights overlap by at least a quarter of the
+  // shorter one are side by side; otherwise they're in different rows.
+  const rows = [];
+  for (const n of [...items].sort((a, b) => (boxOf(a).y + boxOf(a).height / 2) - (boxOf(b).y + boxOf(b).height / 2))) {
+    const b = boxOf(n), row = rows[rows.length - 1];
+    const overlap = row && Math.min(row.bottom, b.y + b.height) - Math.max(row.top, b.y);
+    if (row && overlap > 0.25 * Math.min(row.bottom - row.top, b.height)) {
+      row.items.push(n);
+      row.top = Math.min(row.top, b.y);
+      row.bottom = Math.max(row.bottom, b.y + b.height);
+    } else {
+      rows.push({ items: [n], top: b.y, bottom: b.y + b.height, centre: 0 });
+    }
+  }
+  rows.forEach(r => { r.items.sort((a, b) => boxOf(a).x - boxOf(b).x); r.centre = (r.top + r.bottom) / 2; });
+  rules.forEach(n => { const b = boxOf(n); rows.push({ rule: n, centre: b.y + b.height / 2 }); });
+  rows.sort((a, b) => a.centre - b.centre);
+  const contentRows = rows.filter(r => r.items);
+
+  // Space for the content across the label: inside the innermost frame if
+  // there is one, otherwise between the side margins.
+  const inner = frames.length ? frames.reduce((a, b) => (boxOf(a).width < boxOf(b).width ? a : b)) : null;
+  let left = FIT_SIDE, right = LABEL_WIDTH - FIT_SIDE;
+  if (inner) {
+    const b = boxOf(inner), sw = inner.strokeWidth();
+    left = b.x + sw + FRAME_PAD;
+    right = b.x + b.width - sw - FRAME_PAD;
+  }
+  const avail = right - left;
+
+  const scaleBy = (n, s) => {
+    if (type(n) === 'text') n.fontSize(n.fontSize() * s);
+    else if (type(n) === 'line') n.points(n.points().map(v => v * s));
+    else { n.width(n.width() * s); n.height(n.height() * s); }
+  };
+  const measure = (r) => {
+    const boxes = r.items.map(boxOf);
+    const height = Math.max(...boxes.map(b => b.height));
+    const gap = FIT_GAP * height;
+    return { boxes, height, gap, width: boxes.reduce((w, b) => w + b.width, 0) + gap * (r.items.length - 1) };
+  };
+  // The widest row (gaps included) decides the scale — unless that would
+  // make the design taller than the tape is wide (a lone short word or
+  // small icon), which is capped at square. Text doesn't grow exactly in
+  // proportion to its font size, so a second pass corrects the small
+  // overshoot/undershoot, same as Fit to width.
+  for (let pass = 0; pass < 2; pass++) {
+    const sizes = contentRows.map(measure);
+    const height = sizes.reduce((h, m, i) => h + m.height + (i ? FIT_ROW_GAP * Math.min(m.height, sizes[i - 1].height) : 0), 0);
+    const s = Math.min(avail / Math.max(...sizes.map(m => m.width)), avail / height);
+    items.forEach(n => scaleBy(n, s));
+  }
+
+  // Lay the rows out top to bottom.
+  const moveTo = (n, b, x, y) => { n.x(n.x() + x - b.x); n.y(n.y() + y - b.y); };
+  const sized = new Map(contentRows.map(r => [r, measure(r)]));
+  const contentWidth = Math.max(...[...sized.values()].map(m => m.width));
+  // Rows are spaced by the shorter of the nearest content rows either side,
+  // so a divider line sits midway between the rows it separates.
+  const nearestHeight = (i, step) => {
+    for (; i >= 0 && i < rows.length; i += step) if (rows[i].items) return sized.get(rows[i]).height;
+    return Infinity;
+  };
+  let y = FIT_TOP;
+  if (inner) y = boxOf(inner).x + inner.strokeWidth() + FRAME_PAD; // same inset as the frame's sides
+  rows.forEach((r, i) => {
+    if (i > 0) y += FIT_ROW_GAP * Math.min(nearestHeight(i - 1, -1), nearestHeight(i, 1));
+    if (r.rule) {
+      const n = r.rule, sw = n.strokeWidth();
+      n.points([0, 0, Math.max(10, contentWidth - sw), 0]);
+      moveTo(n, boxOf(n), left + (avail - contentWidth) / 2, y);
+      y += boxOf(n).height;
+      return;
+    }
+    const m = sized.get(r);
+    let x = left + (avail - m.width) / 2;
+    r.items.forEach((n, j) => {
+      const b = m.boxes[j];
+      moveTo(n, b, x, y + (m.height - b.height) / 2);
+      x += b.width + m.gap;
+    });
+    y += m.height;
+  });
+
+  // Frames: top inset matches each frame's side inset, and the bottom is
+  // padded the same as the top, so nested frames stay evenly nested.
+  if (inner) {
+    const innerBox = boxOf(inner);
+    const innerBottom = y + FRAME_PAD + inner.strokeWidth();
+    frames.forEach(f => {
+      const b = boxOf(f), sw = f.strokeWidth();
+      const fTop = b.x, fBottom = innerBottom + (innerBox.x - b.x);
+      f.y(fTop + sw / 2);
+      f.height(fBottom - fTop - sw);
+    });
+  }
+
+  recalcStageSize();
+  if (selected) { transformer.forceUpdate(); renderPanel(); }
+  scheduleHistoryCommit();
+}
+
 // ---------- property panel ----------
 
 function fontDropdownHtml(currentFamily) {
@@ -1353,6 +1571,7 @@ document.getElementById('addText').onclick = addText;
 document.getElementById('addBorder').onclick = addBorder;
 document.getElementById('addLine').onclick = addLine;
 document.getElementById('addDate').onclick = addDateField;
+document.getElementById('magicFitBtn').onclick = magicFit;
 document.getElementById('addImageBtn').onclick = () => document.getElementById('imageInput').click();
 document.getElementById('imageInput').onchange = (e) => {
   if (e.target.files[0]) addImageFromFile(e.target.files[0]);
@@ -1379,10 +1598,12 @@ function serializeElement(node) {
 
   if (type === 'text') {
     return Object.assign(base, {
+      box: 'ink', // x/y is the top-left of the glyphs — see legacyInkOffset()
       text: node.text(),
       fontFamily: node.fontFamily(),
       fontSize: node.fontSize(),
       fontStyle: node.fontStyle(),
+      lineHeight: node.lineHeight(),
       isDateField: !!node.getAttr('isDateField'),
       dateFormat: node.getAttr('dateFormat') || null,
       dateValue: node.getAttr('dateValue') || null,
@@ -1410,25 +1631,53 @@ function serializeCanvas() {
   return [...elements].sort((a, b) => a.zIndex() - b.zIndex()).map(serializeElement);
 }
 
+// Text saved before InkText has x/y at the top-left of Konva's own box
+// (see InkText), and its line spacing came from whether the text had
+// descenders. Work out where Konva drew the glyphs inside that box — each
+// line centred across it, with the middle of the em box half a line down —
+// and return the offset to their ink box, so old templates print exactly
+// as they did.
+function legacyInkOffset(node) {
+  inkCtx.font = node._getContextFont();
+  inkCtx.textBaseline = 'middle';
+  const pitch = node.fontSize() * node.lineHeight();
+  let dx = Infinity, dy = Infinity;
+  node.textArr.forEach((l, i) => {
+    if (!l.text.trim()) return;
+    const m = inkCtx.measureText(l.text);
+    dx = Math.min(dx, (node.textWidth - l.width) / 2 - m.actualBoundingBoxLeft);
+    dy = Math.min(dy, i * pitch + pitch / 2 - m.actualBoundingBoxAscent);
+  });
+  inkCtx.textBaseline = 'alphabetic';
+  return dx === Infinity ? { dx: 0, dy: 0 } : { dx, dy };
+}
+
 // keepDate: undo/redo passes true to restore a date field exactly as it
 // was; loading a template leaves it false so the date resets to today.
 function deserializeElement(desc, keepDate) {
   if (desc.type === 'text') {
-    const node = new Konva.Text({
+    const legacy = desc.box !== 'ink';
+    const node = new InkText({
       x: desc.x, y: desc.y, rotation: desc.rotation,
       text: desc.text, fontFamily: desc.fontFamily, fontSize: desc.fontSize,
       fontStyle: desc.fontStyle, fill: 'black', align: 'center',
+      lineHeight: legacy ? (/[gjpqy]/.test(desc.text) ? 1 : 0.85) : (desc.lineHeight || 1),
     });
-    // Templates saved while text boxes had a fixed width carry desc.width.
-    // Convert to the auto-width box without moving anything on the label:
-    // bake any word-wrapping that width caused into explicit newlines, and
-    // keep the text centered where it was (it was align:'center' inside).
-    if (desc.width) {
-      node.width(desc.width);
-      const lines = node.textArr.map(l => l.text);
-      node.width('auto');
-      node.text(lines.join('\n'));
-      shiftAlongText(node, (desc.width - node.width()) / 2);
+    if (legacy) {
+      // Templates saved while text boxes had a fixed width carry desc.width.
+      // Convert to the auto-width box without moving anything on the label:
+      // bake any word-wrapping that width caused into explicit newlines, and
+      // keep the text centred where it was (it was align:'center' inside).
+      let dx = 0;
+      if (desc.width) {
+        node.width(desc.width);
+        const lines = node.textArr.map(l => l.text);
+        node.width('auto');
+        node.text(lines.join('\n'));
+        dx = (desc.width - node.textWidth) / 2;
+      }
+      const offset = legacyInkOffset(node);
+      shiftAlongText(node, dx + offset.dx, offset.dy);
     }
     node.on('dblclick dbltap', () => editText(node));
     if (desc.isDateField) {
@@ -1439,7 +1688,6 @@ function deserializeElement(desc, keepDate) {
       node.setAttr('dateValue', keepDate && desc.dateValue ? desc.dateValue : toLocalISODate(new Date()));
       node.text(formatDate(node.getAttr('dateValue'), desc.dateFormat));
     }
-    applyTightLineHeight(node);
     registerElement(node, 'text');
     return;
   }
